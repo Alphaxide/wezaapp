@@ -1,5 +1,6 @@
 import "package:flutter/material.dart";
 import "package:intl/intl.dart";
+import "package:weza/utilitychart.dart";
 
 void main() {
   runApp(const MPesaTrackerApp());
@@ -858,7 +859,7 @@ class MPesaTrackerApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'M-Pesa Tracker',
+      title: 'Weza',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF00A86B), // M-Pesa green
@@ -990,6 +991,17 @@ final List<Transaction> seedTransactions = [
     category: 'Utilities',
     reference: 'Electricity bill',
   ),
+
+  Transaction(
+    id: 'QJL7HPIHX6',
+    type: 'paybill',
+    recipient: 'KPLC',
+    amount: 1200,
+    date: DateTime.now().subtract(const Duration(days: 2)),
+    description: 'Paid to KPLC',
+    category: 'Utilities',
+    reference: 'Electricity bill',
+  ),
   Transaction(
     id: 'QJL7HPIHX5',
     type: 'withdraw',
@@ -1046,7 +1058,7 @@ class _HomeScreenState extends State<HomeScreen> {
     const DashboardScreen(),
     const TransactionsScreen(),
     const BudgetScreen(),
-    const ProfileScreen(),
+    const TransactionAnalysisScreen(),
   ];
 
   @override
@@ -1074,8 +1086,8 @@ class _HomeScreenState extends State<HomeScreen> {
             label: 'Budget',
           ),
           NavigationDestination(
-            icon: Icon(Icons.person),
-            label: 'Profile',
+            icon: Icon(Icons.tab),
+            label: 'Analysis',
           ),
         ],
       ),
@@ -1102,7 +1114,7 @@ class DashboardScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('M-Pesa Tracker'),
+        title: const Text('Weza'),
         centerTitle: true,
       ),
       body: SingleChildScrollView(
@@ -1547,9 +1559,17 @@ class TransactionsScreen extends StatelessWidget {
                       color: transaction.type == 'receive' ? Colors.green : Colors.red,
                     ),
                   ),
-                  onTap: () {
-                    // Show transaction details
-                  },
+                 onTap: () {
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (context) => TransactionDetailsScreen(
+        transaction: transaction,
+      ),
+    ),
+  );
+},
+
                 );
               },
             ),
