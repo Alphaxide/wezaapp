@@ -1443,7 +1443,7 @@ class TransactionDetailsScreen extends StatelessWidget {
                   // Report issue or get help functionality
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text('Support request sent'),
+                      content: Text('You will be redirected'),
                       behavior: SnackBarBehavior.floating,
                     ),
                   );
@@ -1458,7 +1458,7 @@ class TransactionDetailsScreen extends StatelessWidget {
                   elevation: 0,
                 ),
                 child: const Text(
-                  'Report an Issue',
+                  'Label Transaction',
                   style: TextStyle(
                     fontWeight: FontWeight.w600,
                     fontSize: 16,
