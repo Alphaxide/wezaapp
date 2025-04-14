@@ -45,39 +45,187 @@ class _TransactionAnalysisScreenState extends State<TransactionAnalysisScreen> {
     // Get monthly spending data
     final monthlySpendingData = _getMonthlySpendingData(filteredTransactions);
     
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Transaction Analysis'),
-        centerTitle: true,
+   
+   return Scaffold(
+  backgroundColor: const Color(0xFFF5F7FA), // Match dashboard background
+  appBar: AppBar(
+    title: const Text(
+      'Transaction Analysis',
+      style: TextStyle(
+        fontWeight: FontWeight.w500,
+        fontSize: 22,
+        fontFamily: 'Poppins',
+        color: Colors.white,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Category Selector
-            Card(
-              elevation: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(12.0),
+    ),
+    centerTitle: true,
+    elevation: 0,
+    backgroundColor: Theme.of(context).primaryColor,
+    actions: [
+      IconButton(
+        icon: const Icon(Icons.filter_list, color: Colors.white),
+        onPressed: () {},
+      ),
+    ],
+  ),
+  body: SingleChildScrollView(
+    padding: EdgeInsets.zero,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Gradient header with summary
+        Container(
+          padding: const EdgeInsets.all(16.0),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Theme.of(context).primaryColor,
+                Theme.of(context).primaryColor.withOpacity(0.85),
+              ],
+            ),
+            borderRadius: const BorderRadius.only(
+              bottomLeft: Radius.circular(32),
+              bottomRight: Radius.circular(32),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 10,
+                offset: const Offset(0, 5),
+              ),
+            ],
+          ),
+          child: Column(
+            children: [
+              // Top row with summary stats
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _selectedCategory == 'All Categories' 
+                            ? 'All Transactions' 
+                            : _selectedCategory,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'KSh ${NumberFormat('#,###.00').format(totalSpent - totalReceived)}',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 24,
+                          color: totalReceived > totalSpent ? Colors.green.shade300 : Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.date_range,
+                        color: Colors.white70,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: DropdownButton<String>(
+                          value: _selectedTimeFrame,
+                          dropdownColor: Theme.of(context).primaryColor,
+                          underline: Container(),
+                          icon: const Icon(Icons.arrow_drop_down, color: Colors.white),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                          ),
+                          onChanged: (String? newValue) {
+                            if (newValue != null) {
+                              setState(() {
+                                _selectedTimeFrame = newValue;
+                              });
+                            }
+                          },
+                          items: _timeFrames.map<DropdownMenuItem<String>>((String value) {
+                            return DropdownMenuItem<String>(
+                              value: value,
+                              child: Text(value),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              
+              const SizedBox(height: 20),
+              
+              // Stats row
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _StatisticItem(
+                    title: 'Transactions',
+                    value: filteredTransactions.length.toString(),
+                    icon: Icons.receipt_long,
+                    color: Colors.white,
+                  ),
+                  _StatisticItem(
+                    title: 'Money Out',
+                    value: 'KSh ${NumberFormat('#,###').format(totalSpent)}',
+                    icon: Icons.arrow_upward,
+                    color: Colors.red.shade300,
+                  ),
+                  _StatisticItem(
+                    title: 'Money In',
+                    value: 'KSh ${NumberFormat('#,###').format(totalReceived)}',
+                    icon: Icons.arrow_downward,
+                    color: Colors.green.shade300,
+                  ),
+                ],
+              ),
+              
+              const SizedBox(height: 16),
+              
+              // Category Selector
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
                 child: Row(
                   children: [
-                    const Icon(Icons.category, color: Colors.blueGrey),
+                    const Icon(Icons.category, color: Colors.white70),
                     const SizedBox(width: 12),
                     Expanded(
                       child: DropdownButton<String>(
                         isExpanded: true,
                         value: _selectedCategory,
                         underline: Container(),
-                        hint: const Text('Select Category'),
-                        onChanged: (newValue) {
+                        dropdownColor: Theme.of(context).primaryColor,
+                        style: const TextStyle(color: Colors.white),
+                        hint: const Text('Select Category', style: TextStyle(color: Colors.white70)),
+                        icon: const Icon(Icons.arrow_drop_down, color: Colors.white),
+                        onChanged: (String? newValue) {
                           if (newValue != null) {
                             setState(() {
                               _selectedCategory = newValue;
                             });
                           }
                         },
-                        items: _categories.map<DropdownMenuItem<String>>((value) {
+                        items: _categories.map<DropdownMenuItem<String>>((String value) {
                           return DropdownMenuItem<String>(
                             value: value,
                             child: Text(value),
@@ -88,377 +236,382 @@ class _TransactionAnalysisScreenState extends State<TransactionAnalysisScreen> {
                   ],
                 ),
               ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-            // Summary Card
-            Card(
-              elevation: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              _selectedCategory == 'All Categories' 
-                                  ? 'All Transactions' 
-                                  : '$_selectedCategory Transactions',
-                              style: const TextStyle(
-                                color: Colors.grey,
-                                fontSize: 14,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'KSh ${NumberFormat('#,###.00').format(totalSpent - totalReceived)}',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 22,
-                                color: totalReceived > totalSpent ? Colors.green : Colors.red,
-                              ),
-                            ),
-                          ],
-                        ),
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.blue.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(
-                            Icons.account_balance_wallet,
-                            color: Colors.blue,
-                            size: 28,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        _StatisticItem(
-                          title: 'Transactions',
-                          value: filteredTransactions.length.toString(),
-                          icon: Icons.receipt_long,
-                          color: Colors.purple,
-                        ),
-                        _StatisticItem(
-                          title: 'Money Out',
-                          value: 'KSh ${NumberFormat('#,###').format(totalSpent)}',
-                          icon: Icons.arrow_upward,
-                          color: Colors.red,
-                        ),
-                        _StatisticItem(
-                          title: 'Money In',
-                          value: 'KSh ${NumberFormat('#,###').format(totalReceived)}',
-                          icon: Icons.arrow_downward,
-                          color: Colors.green,
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Time frame selector
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Spending Over Time',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                DropdownButton<String>(
-                  value: _selectedTimeFrame,
-                  onChanged: (newValue) {
-                    if (newValue != null) {
-                      setState(() {
-                        _selectedTimeFrame = newValue;
-                      });
-                    }
-                  },
-                  items: _timeFrames.map<DropdownMenuItem<String>>((value) {
-                    return DropdownMenuItem<String>(
-                      value: value,
-                      child: Text(value),
-                    );
-                  }).toList(),
-                ),
-              ],
-            ),
-            
-            const SizedBox(height: 16),
-            
-            // Monthly Spending Chart
-            Card(
-              elevation: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(
-                      height: 250,
-                      child: _buildMonthlySpendingChart(monthlySpendingData),
-                    ),
-                    const SizedBox(height: 8),
-                    const Center(
-                      child: Text(
-                        'Monthly Transaction Flow',
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Category Breakdown
-            const Text(
-              'Spending by Category',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-            // Category Breakdown Chart
-            Card(
-              elevation: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(
-                      height: 250,
-                      child: _buildCategoryBreakdownChart(categoryBreakdown),
-                    ),
-                    const SizedBox(height: 16),
-                    // Legend
-                    Wrap(
-                      spacing: 16.0,
-                      runSpacing: 8.0,
-                      children: categoryBreakdown.map((category) => _buildLegendItem(
-                        category.category,
-                        _getCategoryColor(category.category),
-                      )).toList(),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Transaction Type Analysis
-            const Text(
-              'Transaction Types',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-            Card(
-              elevation: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(
-                      height: 200,
-                      child: _buildTransactionTypeChart(filteredTransactions),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _buildLegendItem('Send', Colors.orange),
-                        const SizedBox(width: 16),
-                        _buildLegendItem('Receive', Colors.green),
-                        const SizedBox(width: 16),
-                        _buildLegendItem('Paybill', Colors.blue),
-                        const SizedBox(width: 16),
-                        _buildLegendItem('Withdraw', Colors.purple),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Recent Transactions
-            const Text(
-              'Recent Transactions',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-            // Recent Transactions List
-            Card(
-              elevation: 2,
-              child: ListView.separated(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: filteredTransactions.length > 5 ? 5 : filteredTransactions.length,
-                separatorBuilder: (context, index) => const Divider(height: 1),
-                itemBuilder: (context, index) {
-                  final transaction = filteredTransactions[index];
-                  return ListTile(
-                    leading: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: _getTypeColor(transaction.type).withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        _getTypeIcon(transaction.type),
-                        color: _getTypeColor(transaction.type),
-                      ),
-                    ),
-                    title: Text(transaction.recipient),
-                    subtitle: Text(
-                      '${transaction.category} • ${DateFormat('dd MMM yyyy').format(transaction.date)}',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    trailing: Text(
-                      'KSh ${NumberFormat('#,###.00').format(transaction.amount)}',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: transaction.type == 'receive' ? Colors.green : Colors.red,
-                      ),
-                    ),
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => TransactionDetailsScreen(
-                            transaction: transaction,
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Transaction Insights
-            const Text(
-              'Spending Insights',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-            Card(
-              elevation: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  children: [
-                    _InsightTile(
-                      icon: Icons.trending_up,
-                      color: Colors.red,
-                      title: 'Spending Trend',
-                      description: _getSpendingTrendInsight(monthlySpendingData),
-                    ),
-                    const Divider(),
-                    _InsightTile(
-                      icon: Icons.category,
-                      color: Colors.blue,
-                      title: 'Top Spending',
-                      description: _getTopSpendingInsight(categoryBreakdown),
-                    ),
-                    const Divider(),
-                    _InsightTile(
-                      icon: Icons.calendar_today,
-                      color: Colors.purple,
-                      title: 'Transaction Frequency',
-                      description: _getTransactionFrequencyInsight(filteredTransactions),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Financial Tips
-            Card(
-              elevation: 2,
-              color: Colors.green.shade50,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Row(
-                      children: [
-                        Icon(Icons.lightbulb, color: Colors.green),
-                        SizedBox(width: 8),
-                        Text(
-                          'Financial Tips',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    _buildTipItem(
-                      _getPersonalizedTip(filteredTransactions, categoryBreakdown),
-                    ),
-                    _buildTipItem(
-                      'Setting up automatic savings can help you build wealth over time',
-                    ),
-                    _buildTipItem(
-                      'Track your expenses regularly to identify areas where you can reduce spending',
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-          ],
+            ],
+          ),
         ),
+        
+        const SizedBox(height: 24),
+        
+        // Spending Over Time
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: const [
+              Text(
+                'Spending Over Time',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF2D3142),
+                ),
+              ),
+            ],
+          ),
+        ),
+        
+        const SizedBox(height: 16),
+        
+        // Monthly Spending Chart
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    height: 250,
+                    child: _buildMonthlySpendingChart(monthlySpendingData),
+                  ),
+                  const SizedBox(height: 8),
+                  const Center(
+                    child: Text(
+                      'Monthly Transaction Flow',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        
+        const SizedBox(height: 24),
+        
+        // Category Breakdown
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: const [
+              Text(
+                'Spending by Category',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF2D3142),
+                ),
+              ),
+            ],
+          ),
+        ),
+        
+        const SizedBox(height: 16),
+        
+        // Category Breakdown Chart
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    height: 250,
+                    child: _buildCategoryBreakdownChart(categoryBreakdown),
+                  ),
+                  const SizedBox(height: 16),
+                  // Legend
+                  Wrap(
+                    spacing: 16.0,
+                    runSpacing: 8.0,
+                    children: categoryBreakdown.map((category) => _buildLegendItem(
+                      category.category,
+                      _getCategoryColor(category.category),
+                    )).toList(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        
+        const SizedBox(height: 24),
+        
+        // Transaction Types
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: const [
+              Text(
+                'Transaction Types',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF2D3142),
+                ),
+              ),
+            ],
+          ),
+        ),
+        
+        const SizedBox(height: 16),
+        
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    height: 200,
+                    child: _buildTransactionTypeChart(filteredTransactions),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _buildLegendItem('Send', Colors.orange),
+                      const SizedBox(width: 16),
+                      _buildLegendItem('Receive', Colors.green),
+                      const SizedBox(width: 16),
+                      _buildLegendItem('Paybill', Colors.blue),
+                      const SizedBox(width: 16),
+                      _buildLegendItem('Withdraw', Colors.purple),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        
+        const SizedBox(height: 24),
+        
+        // Recent Transactions
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Recent Transactions',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF2D3142),
+                ),
+              ),
+              TextButton(
+                onPressed: () {},
+                child: const Text('View All'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(context).primaryColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+        
+        const SizedBox(height: 16),
+        
+        // Recent Transactions List
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: filteredTransactions.length > 5 ? 5 : filteredTransactions.length,
+              separatorBuilder: (context, index) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final transaction = filteredTransactions[index];
+                return ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: _getTypeColor(transaction.type).withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      _getTypeIcon(transaction.type),
+                      color: _getTypeColor(transaction.type),
+                    ),
+                  ),
+                  title: Text(transaction.recipient),
+                  subtitle: Text(
+                    '${transaction.category} • ${DateFormat('dd MMM yyyy').format(transaction.date)}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  trailing: Text(
+                    'KSh ${NumberFormat('#,###.00').format(transaction.amount)}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: transaction.type == 'receive' ? Colors.green : Colors.red,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => TransactionDetailsScreen(
+                          transaction: transaction,
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+        
+        const SizedBox(height: 24),
+        
+        // Spending Insights
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: const [
+              Text(
+                'Spending Insights',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF2D3142),
+                ),
+              ),
+            ],
+          ),
+        ),
+        
+        const SizedBox(height: 16),
+        
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                children: [
+                  _InsightTile(
+                    icon: Icons.trending_up,
+                    color: Colors.red,
+                    title: 'Spending Trend',
+                    description: _getSpendingTrendInsight(monthlySpendingData),
+                  ),
+                  const Divider(),
+                  _InsightTile(
+                    icon: Icons.category,
+                    color: Colors.blue,
+                    title: 'Top Spending',
+                    description: _getTopSpendingInsight(categoryBreakdown),
+                  ),
+                  const Divider(),
+                  _InsightTile(
+                    icon: Icons.calendar_today,
+                    color: Colors.purple,
+                    title: 'Transaction Frequency',
+                    description: _getTransactionFrequencyInsight(filteredTransactions),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        
+        const SizedBox(height: 24),
+        
+        // Financial Tips
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            color: Theme.of(context).primaryColor.withOpacity(0.1),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.lightbulb, color: Theme.of(context).primaryColor),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Financial Tips',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: Theme.of(context).primaryColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _buildTipItem(
+                    _getPersonalizedTip(filteredTransactions, categoryBreakdown),
+                  ),
+                  _buildTipItem(
+                    'Setting up automatic savings can help you build wealth over time',
+                  ),
+                  _buildTipItem(
+                    'Track your expenses regularly to identify areas where you can reduce spending',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        
+        const SizedBox(height: 80), // Bottom padding for FAB
+      ],
+    ),
+  ),
+  floatingActionButton: FloatingActionButton.extended(
+    onPressed: () {},
+    icon: const Icon(Icons.download),
+    label: const Text(
+      'Export Report',
+      style: TextStyle(
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.5,
       ),
-    );
+    ),
+    elevation: 4,
+    backgroundColor: Theme.of(context).primaryColor,
+  ),
+  floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+);
   }
   
   Widget _buildMonthlySpendingChart(List<MonthlyTransactionData> data) {
@@ -1128,7 +1281,6 @@ class MonthlyTransactionData {
   
   MonthlyTransactionData(this.month, this.spent, this.received);
 }
-
 class TransactionDetailsScreen extends StatelessWidget {
   final Transaction transaction;
   
@@ -1140,202 +1292,207 @@ class TransactionDetailsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text('Transaction Details'),
+        title: const Text(
+          'Transaction Details',
+          style: TextStyle(
+            fontWeight: FontWeight.w500,
+            fontSize: 20,
+            fontFamily: 'Poppins',
+            color: Colors.white,
+          ),
+        ),
         centerTitle: true,
+        elevation: 0,
+        backgroundColor: Theme.of(context).primaryColor,
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(20.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header with amount
-            Card(
-              elevation: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: _getTypeColor(transaction.type).withOpacity(0.2),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            _getTypeIcon(transaction.type),
-                            color: _getTypeColor(transaction.type),
-                            size: 32,
-                          ),
-                        ),
-                      ],
+            // Header with amount and transaction type
+            Center(
+              child: Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: _getTypeColor(transaction.type).withOpacity(0.1),
+                      shape: BoxShape.circle,
                     ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'KSh ${NumberFormat('#,###.00').format(transaction.amount)}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 28,
-                      ),
+                    child: Icon(
+                      _getTypeIcon(transaction.type),
+                      color: _getTypeColor(transaction.type),
+                      size: 36,
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _getTransactionTypeText(transaction.type),
-                      style: TextStyle(
-                        color: _getTypeColor(transaction.type),
-                        fontWeight: FontWeight.bold,
-                      ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'KSh ${NumberFormat('#,###.00').format(transaction.amount)}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 32,
+                      height: 1.2,
+                      color: Color(0xFF1A1A1A),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      DateFormat('EEEE, dd MMMM yyyy, hh:mm a').format(transaction.date),
-                      style: const TextStyle(
-                        color: Colors.grey,
-                      ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _getTransactionTypeText(transaction.type),
+                    style: TextStyle(
+                      color: _getTypeColor(transaction.type),
+                      fontWeight: FontWeight.w600,
+                      fontSize: 16,
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    DateFormat('EEEE, dd MMMM yyyy, hh:mm a').format(transaction.date),
+                    style: const TextStyle(
+                      color: Color(0xFF757575),
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
               ),
             ),
             
-            const SizedBox(height: 24),
+            const SizedBox(height: 32),
             
             // Transaction details
             const Text(
-              'Transaction Details',
+              'TRANSACTION DETAILS',
               style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF757575),
+                letterSpacing: 0.8,
               ),
             ),
             
             const SizedBox(height: 16),
             
-            Card(
-              elevation: 2,
+            Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: Colors.white,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 10,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
               child: Column(
                 children: [
                   _buildDetailRow('Recipient', transaction.recipient),
-                  const Divider(height: 1),
+                  _buildDivider(),
                   _buildDetailRow('Category', transaction.category),
-                  const Divider(height: 1),
+                  _buildDivider(),
                   _buildDetailRow('Reference', transaction.reference),
-                  const Divider(height: 1),
+                  _buildDivider(),
                   _buildDetailRow('Transaction ID', transaction.id),
+                  _buildDivider(),
+                  _buildDetailRow('Balance', 'KSh ${NumberFormat('#,###.00').format(_getBalance(transaction))}'),
                 ],
               ),
             ),
             
-            const SizedBox(height: 24),
+            const SizedBox(height: 32),
             
-            // Actions
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      // Add to favorites functionality
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Added to favorites'),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.favorite_border),
-                    label: const Text('Add to Favorites'),
-                    style: ElevatedButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      backgroundColor: Colors.blue,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      // Share functionality
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Share functionality is not implemented in this demo'),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.share),
-                    label: const Text('Share'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Similar transactions
+            // M-Pesa Message
             const Text(
-              'Similar Transactions',
+              'M-PESA MESSAGE',
               style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF757575),
+                letterSpacing: 0.8,
               ),
             ),
             
             const SizedBox(height: 16),
             
-            Card(
-              elevation: 2,
-              child: Column(
-                children: [
-                  _buildSimilarTransaction(
-                    'John Doe',
-                    transaction.category,
-                    4500.0,
-                    DateTime.now().subtract(const Duration(days: 7)),
-                  ),
-                  const Divider(height: 1),
-                  _buildSimilarTransaction(
-                    'Jane Smith',
-                    transaction.category,
-                    3500.0,
-                    DateTime.now().subtract(const Duration(days: 14)),
-                  ),
-                  const Divider(height: 1),
-                  _buildSimilarTransaction(
-                    'Robert Johnson',
-                    transaction.category,
-                    5000.0,
-                    DateTime.now().subtract(const Duration(days: 21)),
-                  ),
-                ],
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: const Color(0xFFF9F9F9),
+                border: Border.all(color: const Color(0xFFEEEEEE)),
+              ),
+              child: Text(
+                _getMpesaMessage(transaction),
+                style: const TextStyle(
+                  height: 1.5,
+                  color: Color(0xFF333333),
+                  fontSize: 14,
+                ),
               ),
             ),
+            
+            const SizedBox(height: 32),
+            
+            // Action Button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {
+                  // Report issue or get help functionality
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Support request sent'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  backgroundColor: Theme.of(context).primaryColor,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 0,
+                ),
+                child: const Text(
+                  'Report an Issue',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+            ),
+            
+            const SizedBox(height: 24),
           ],
         ),
       ),
     );
   }
   
-  Widget _buildDetailRow(String label, String value) {
+  Widget _buildDetailRow(String title, String value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12.0, horizontal: 16.0),
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(
-            label,
+            title,
             style: const TextStyle(
-              color: Colors.grey,
+              color: Color(0xFF757575),
+              fontSize: 14,
             ),
           ),
           Text(
             value,
             style: const TextStyle(
-              fontWeight: FontWeight.bold,
+              fontWeight: FontWeight.w500,
+              fontSize: 14,
+              color: Color(0xFF1A1A1A),
             ),
           ),
         ],
@@ -1343,29 +1500,48 @@ class TransactionDetailsScreen extends StatelessWidget {
     );
   }
   
-  Widget _buildSimilarTransaction(
-    String recipient,
-    String category,
-    double amount,
-    DateTime date,
-  ) {
-    return ListTile(
-      title: Text(recipient),
-      subtitle: Text(
-        '${DateFormat('dd MMM yyyy').format(date)} • $category',
-      ),
-      trailing: Text(
-        'KSh ${NumberFormat('#,###.00').format(amount)}',
-        style: const TextStyle(
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-      onTap: () {},
+  Widget _buildDivider() {
+    return const Divider(
+      height: 1,
+      thickness: 1,
+      indent: 16,
+      endIndent: 16,
+      color: Color(0xFFF0F0F0),
     );
   }
   
+  Color _getTypeColor(String type) {
+    switch (type.toLowerCase()) {
+      case 'send':
+        return const Color(0xFFFF6B01);
+      case 'receive':
+        return const Color(0xFF00AA55);
+      case 'paybill':
+        return const Color(0xFF1E88E5);
+      case 'withdraw':
+        return const Color(0xFF8E24AA);
+      default:
+        return const Color(0xFF757575);
+    }
+  }
+  
+  IconData _getTypeIcon(String type) {
+    switch (type.toLowerCase()) {
+      case 'send':
+        return Icons.arrow_upward_rounded;
+      case 'receive':
+        return Icons.arrow_downward_rounded;
+      case 'paybill':
+        return Icons.receipt_rounded;
+      case 'withdraw':
+        return Icons.account_balance_rounded;
+      default:
+        return Icons.swap_horiz_rounded;
+    }
+  }
+  
   String _getTransactionTypeText(String type) {
-    switch (type) {
+    switch (type.toLowerCase()) {
       case 'send':
         return 'Money Sent';
       case 'receive':
@@ -1379,33 +1555,56 @@ class TransactionDetailsScreen extends StatelessWidget {
     }
   }
   
-  Color _getTypeColor(String type) {
-    switch (type) {
+  double _getBalance(Transaction transaction) {
+    // Simulated balance calculation based on transaction type
+    switch (transaction.type.toLowerCase()) {
       case 'send':
-        return Colors.orange;
+        return 15432.75 - transaction.amount;
       case 'receive':
-        return Colors.green;
+        return 15432.75 + transaction.amount;
       case 'paybill':
-        return Colors.blue;
+        return 15432.75 - transaction.amount;
       case 'withdraw':
-        return Colors.purple;
+        return 15432.75 - transaction.amount;
       default:
-        return Colors.grey;
+        return 15432.75;
     }
   }
   
-  IconData _getTypeIcon(String type) {
-    switch (type) {
+  String _getMpesaMessage(Transaction transaction) {
+    final String formattedAmount = NumberFormat('#,###.00').format(transaction.amount);
+    final String formattedDate = DateFormat('d/M/yy h:mm a').format(transaction.date);
+    final String balance = NumberFormat('#,###.00').format(_getBalance(transaction));
+    final String transactionCost = NumberFormat('#,###.00').format(_getTransactionCost(transaction));
+    
+    switch (transaction.type.toLowerCase()) {
       case 'send':
-        return Icons.arrow_upward;
+        return 'MPWKA5RT3D Confirmed. Ksh$formattedAmount sent to ${transaction.recipient} on $formattedDate. New M-PESA balance is Ksh$balance. Transaction cost, Ksh$transactionCost. Amount you can transact within the day is 299,840.00. Pay bills free with M-PESA. SAFARICOM TRANSPARENT FOR YOU.';
       case 'receive':
-        return Icons.arrow_downward;
+        return 'MPBJ57YH8F Confirmed. You have received Ksh$formattedAmount from ${transaction.recipient} on $formattedDate. New M-PESA balance is Ksh$balance. Safaricom, Simple. Transparent. Honest.';
       case 'paybill':
-        return Icons.receipt;
+        return 'MPCLK43T9G Confirmed. Ksh$formattedAmount paid to ${transaction.recipient} for account ${transaction.reference} on $formattedDate. New M-PESA balance is Ksh$balance. Transaction cost, Ksh$transactionCost.';
       case 'withdraw':
-        return Icons.money;
+        return 'MPXYQ19F2H Confirmed. Ksh$formattedAmount withdrawn from ${transaction.recipient} Agent on $formattedDate. New M-PESA balance is Ksh$balance. Transaction cost, Ksh$transactionCost. Pay bills free with M-PESA.';
       default:
-        return Icons.swap_horiz;
+        return 'MPJK3LD0W5 Confirmed. Transaction of Ksh$formattedAmount on $formattedDate. New M-PESA balance is Ksh$balance.';
+    }
+  }
+  
+  double _getTransactionCost(Transaction transaction) {
+    // Simulated transaction cost based on amount
+    if (transaction.amount <= 100) {
+      return 0;
+    } else if (transaction.amount <= 1000) {
+      return 11;
+    } else if (transaction.amount <= 2500) {
+      return 22;
+    } else if (transaction.amount <= 5000) {
+      return 33;
+    } else if (transaction.amount <= 10000) {
+      return 55;
+    } else {
+      return 77;
     }
   }
 }

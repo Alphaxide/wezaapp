@@ -1,5 +1,6 @@
 import "package:flutter/material.dart";
 import "package:intl/intl.dart";
+import "package:weza/budgetscreen.dart";
 import "package:weza/utilitychart.dart";
 
 void main() {
@@ -1726,19 +1727,7 @@ class DashboardScreen extends StatelessWidget {
           ),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {},
-        icon: const Icon(Icons.add),
-        label: const Text(
-          'New Transaction',
-          style: TextStyle(
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.5,
-          ),
-        ),
-        elevation: 4,
-        backgroundColor: Theme.of(context).primaryColor,
-      ),
+    
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       // Removed bottom navigation bar as it's now handled by HomeScreen
     );
@@ -1893,16 +1882,7 @@ class TransactionsScreen extends StatelessWidget {
         centerTitle: true,
         elevation: 0,
         backgroundColor: Theme.of(context).primaryColor,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.filter_list, color: Colors.white),
-            onPressed: () {},
-          ),
-          IconButton(
-            icon: const Icon(Icons.search, color: Colors.white),
-            onPressed: () {},
-          ),
-        ],
+      
       ),
       body: SafeArea(
         child: Column(
@@ -2112,22 +2092,6 @@ class TransactionsScreen extends StatelessWidget {
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          _showSmsInputDialog(context);
-        },
-        icon: const Icon(Icons.add),
-        label: const Text(
-          'New Transaction',
-          style: TextStyle(
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.5,
-          ),
-        ),
-        elevation: 4,
-        backgroundColor: Theme.of(context).primaryColor,
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
     );
   }
 
@@ -2306,6 +2270,7 @@ class _TransactionSummaryItem extends StatelessWidget {
     );
   }
 }
+
 class BudgetScreen extends StatelessWidget {
   const BudgetScreen({Key? key}) : super(key: key);
 
@@ -2329,7 +2294,18 @@ class BudgetScreen extends StatelessWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.add, color: Colors.white),
-            onPressed: () {},
+            onPressed: () {
+
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => AddBudgetCategoryScreen(
+                                 
+                                ),
+                              ),
+                            );
+            },
+            // AddBudgetCategoryScreen
           ),
         ],
       ),
@@ -2615,7 +2591,17 @@ class BudgetScreen extends StatelessWidget {
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {},
+        onPressed: () {
+
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => AddBudgetCategoryScreen(
+                                 
+                                ),
+                              ),
+                            );
+        },
         icon: const Icon(Icons.add),
         label: const Text(
           'Create Budget',
@@ -2627,7 +2613,7 @@ class BudgetScreen extends StatelessWidget {
         elevation: 4,
         backgroundColor: Theme.of(context).primaryColor,
       ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
     );
   }
 }
