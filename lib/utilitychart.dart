@@ -61,12 +61,7 @@ class _TransactionAnalysisScreenState extends State<TransactionAnalysisScreen> {
     centerTitle: true,
     elevation: 0,
     backgroundColor: Theme.of(context).primaryColor,
-    actions: [
-      IconButton(
-        icon: const Icon(Icons.filter_list, color: Colors.white),
-        onPressed: () {},
-      ),
-    ],
+  
   ),
   body: SingleChildScrollView(
     padding: EdgeInsets.zero,
