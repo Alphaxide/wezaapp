@@ -124,8 +124,6 @@ class MpesaParser {
     }
 
     // Parse balance
-
-
     final balanceRegex = RegExp(r'[Nn]ew [M-]*PESA balance is Ksh[^0-9]*([0-9,.]+)');
     final balanceMatch = balanceRegex.firstMatch(message);
     if (balanceMatch != null) {
@@ -195,10 +193,10 @@ class MpesaParser {
           name = name.split(" on ")[0].trim();
         }
         
-        // FIX: Extract only first two names
+        // MODIFIED: Extract only first name
         final nameParts = name.split(' ');
-        if (nameParts.length > 2) {
-          senderOrReceiverName = '${nameParts[0]} ${nameParts[1]}';
+        if (nameParts.isNotEmpty) {
+          senderOrReceiverName = nameParts[0];
         } else {
           senderOrReceiverName = name;
         }
@@ -218,7 +216,14 @@ class MpesaParser {
       final pochiRegex = RegExp(r'sent to ([A-Za-z\s]+ POCHI)');
       final pochiMatch = pochiRegex.firstMatch(message);
       if (pochiMatch != null) {
-        senderOrReceiverName = pochiMatch.group(1)!.trim();
+        String name = pochiMatch.group(1)!.trim();
+        // MODIFIED: Extract only first part of the business name
+        final nameParts = name.split(' ');
+        if (nameParts.isNotEmpty && !nameParts[0].contains("POCHI")) {
+          senderOrReceiverName = nameParts[0];
+        } else {
+          senderOrReceiverName = name;
+        }
       }
     } else if (message.contains('sent to') && !message.contains('for account')) {
       transactionType = 'Send Money';
@@ -234,10 +239,10 @@ class MpesaParser {
           name = name.split(" on ")[0].trim();
         }
         
-        // FIX: Extract only first two names
+        // MODIFIED: Extract only first name
         final nameParts = name.split(' ');
-        if (nameParts.length > 2) {
-          senderOrReceiverName = '${nameParts[0]} ${nameParts[1]}';
+        if (nameParts.isNotEmpty) {
+          senderOrReceiverName = nameParts[0];
         } else {
           senderOrReceiverName = name;
         }
@@ -264,10 +269,17 @@ class MpesaParser {
       final businessRegex = RegExp(r'sent to ([A-Za-z0-9\s-]+) for account');
       final businessMatch = businessRegex.firstMatch(message);
       if (businessMatch != null) {
-        senderOrReceiverName = businessMatch.group(1)!.trim();
+        String name = businessMatch.group(1)!.trim();
+        // MODIFIED: Extract only first part of business name
+        final nameParts = name.split(' ');
+        if (nameParts.isNotEmpty) {
+          senderOrReceiverName = nameParts[0];
+        } else {
+          senderOrReceiverName = name;
+        }
       }
       
-      // Extract account number - FIX: capture only the first string
+      // Extract account number - capture only the first string
       final accountRegex = RegExp(r'for account ([A-Za-z0-9-]+)(?:\s+|\s+via|\s+on)');
       final accountMatch = accountRegex.firstMatch(message);
       if (accountMatch != null) {
@@ -286,7 +298,14 @@ class MpesaParser {
         if (name.contains(" on ")) {
           name = name.split(" on ")[0].trim();
         }
-        senderOrReceiverName = name;
+        
+        // MODIFIED: Extract only first part of merchant name
+        final nameParts = name.split(' ');
+        if (nameParts.isNotEmpty) {
+          senderOrReceiverName = nameParts[0];
+        } else {
+          senderOrReceiverName = name;
+        }
       }
       
       // Extract till number
@@ -326,7 +345,14 @@ class MpesaParser {
           if (name.contains(" on ")) {
             name = name.split(" on ")[0].trim();
           }
-          senderOrReceiverName = name;
+          
+          // MODIFIED: Extract only first part of merchant name
+          final nameParts = name.split(' ');
+          if (nameParts.isNotEmpty) {
+            senderOrReceiverName = nameParts[0];
+          } else {
+            senderOrReceiverName = name;
+          }
         }
       }
     } else if (message.contains('bought') && message.contains('airtime')) {
@@ -347,8 +373,16 @@ class MpesaParser {
           if (name.contains(" on ")) {
             name = name.split(" on ")[0].trim();
           }
-          agentDetails = name;
-          senderOrReceiverName = name;
+          
+          // MODIFIED: Extract only first part of agent name
+          final nameParts = name.split(' ');
+          if (nameParts.isNotEmpty) {
+            agentDetails = nameParts[0];
+            senderOrReceiverName = nameParts[0];
+          } else {
+            agentDetails = name;
+            senderOrReceiverName = name;
+          }
         }
       }
     } else if (message.contains('withdrawn') && (message.contains('ATM') || transactionCode.startsWith("QNM"))) {
@@ -359,15 +393,22 @@ class MpesaParser {
       final bankRegex = RegExp(r'from ([A-Za-z\s-]+) ATM');
       final bankMatch = bankRegex.firstMatch(message);
       if (bankMatch != null) {
-        senderOrReceiverName = bankMatch.group(1)!.trim();
+        String bankName = bankMatch.group(1)!.trim();
+        // Extract only first part of bank name
+        final nameParts = bankName.split(' ');
+        if (nameParts.isNotEmpty) {
+          senderOrReceiverName = nameParts[0];
+        } else {
+          senderOrReceiverName = bankName;
+        }
       } else if (message.contains("Co-op")) {
-        senderOrReceiverName = "Co-op Bank";
+        senderOrReceiverName = "Co-op";
       } else if (message.contains("KCB")) {
-        senderOrReceiverName = "KCB Bank";
+        senderOrReceiverName = "KCB";
       } else if (message.contains("Equity")) {
-        senderOrReceiverName = "Equity Bank"; 
+        senderOrReceiverName = "Equity"; 
       } else {
-        senderOrReceiverName = "Bank ATM";  // Default if no specific bank is mentioned
+        senderOrReceiverName = "Bank";  // Default if no specific bank is mentioned
       }
     } else if (message.contains('deposited') && (message.contains('Agent') || message.contains('by Agent'))) {
       transactionType = 'Deposit';
@@ -379,8 +420,17 @@ class MpesaParser {
       if (agentMatch != null) {
         account = agentMatch.group(1)!.trim();
         if (agentMatch.groupCount >= 2 && agentMatch.group(2) != null) {
-          agentDetails = agentMatch.group(2)!.trim();
-          senderOrReceiverName = agentDetails;
+          String name = agentMatch.group(2)!.trim();
+          
+          // MODIFIED: Extract only first part of agent name
+          final nameParts = name.split(' ');
+          if (nameParts.isNotEmpty) {
+            agentDetails = nameParts[0];
+            senderOrReceiverName = nameParts[0];
+          } else {
+            agentDetails = name;
+            senderOrReceiverName = name;
+          }
         }
       }
     }

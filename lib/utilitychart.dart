@@ -1,7 +1,13 @@
+// transaction_analysis_screen.dart
+// ignore_for_file: non_constant_identifier_names
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'main.dart';
+import 'package:weza/file_picker.dart';
+import 'transaction_service.dart';
+import 'transaction_model.dart';
+import 'models/mpesa_message.dart';
 
 class TransactionAnalysisScreen extends StatefulWidget {
   const TransactionAnalysisScreen({Key? key}) : super(key: key);
@@ -11,721 +17,1036 @@ class TransactionAnalysisScreen extends StatefulWidget {
 }
 
 class _TransactionAnalysisScreenState extends State<TransactionAnalysisScreen> {
+  List<DateTime> _selectedMonths = [];  // For tracking selected months in the chart
   String _selectedTimeFrame = 'Last 6 Months';
   String _selectedCategory = 'All Categories';
   final List<String> _timeFrames = ['Last Month', 'Last 3 Months', 'Last 6 Months', 'Last Year'];
-  late List<String> _categories;
-  
+  List<String> _categories = ['All Categories'];
+  List<Transaction> _transactions = [];
+  bool _isLoading = true;
+
   @override
   void initState() {
     super.initState();
-    // Extract unique categories from transactions
-    _categories = ['All Categories', ...seedTransactions.map((t) => t.category).toSet().toList()];
+    _loadTransactions();
   }
-  
-  @override
-  Widget build(BuildContext context) {
-    // Filter transactions based on selected category
-    final List<Transaction> filteredTransactions = _selectedCategory == 'All Categories'
-        ? seedTransactions
-        : seedTransactions.where((t) => t.category == _selectedCategory).toList();
-    
-    // Calculate total spent and received
-    final double totalSpent = filteredTransactions
-        .where((t) => t.type == 'send' || t.type == 'paybill' || t.type == 'withdraw')
-        .fold(0.0, (sum, t) => sum + t.amount);
-    
-    final double totalReceived = filteredTransactions
-        .where((t) => t.type == 'receive')
-        .fold(0.0, (sum, t) => sum + t.amount);
-    
-    // Get category breakdown
-    final categoryBreakdown = _getCategoryBreakdown(filteredTransactions);
-    
-    // Get monthly spending data
-    final monthlySpendingData = _getMonthlySpendingData(filteredTransactions);
-    
-   
-   return Scaffold(
-  backgroundColor: const Color(0xFFF5F7FA), // Match dashboard background
-  appBar: AppBar(
-    title: const Text(
-      'Transaction Analysis',
-      style: TextStyle(
-        fontWeight: FontWeight.w500,
-        fontSize: 22,
-        fontFamily: 'Poppins',
-        color: Colors.white,
+
+  Future<void> _loadTransactions() async {
+    try {
+      final loaded = await TransactionService.loadTransactions();
+      setState(() {
+        _transactions = loaded;
+        _categories = ['All Categories', ..._transactions.map((t) => t.category).toSet().toList()];
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error loading transactions: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  List<Transaction> get _filteredTransactions {
+    List<Transaction> filtered = _transactions.where((t) {
+      final categoryMatch = _selectedCategory == 'All Categories' || t.category == _selectedCategory;
+      return categoryMatch;
+    }).toList();
+
+    return TransactionService.filterByTimeFrame(filtered, _selectedTimeFrame);
+  }
+
+  Widget _buildLoadingIndicator() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: CircularProgressIndicator(
+          color: Theme.of(context).primaryColor,
+          strokeWidth: 3,
+        ),
       ),
-    ),
-    centerTitle: true,
-    elevation: 0,
-    backgroundColor: Theme.of(context).primaryColor,
-  
-  ),
-  body: SingleChildScrollView(
+    );
+  }
+
+Widget _buildAnalysisContent() {
+  final filteredTransactions = _filteredTransactions;
+  final categoryBreakdown = TransactionService.getCategoryBreakdown(filteredTransactions);
+  final monthlySpendingData = TransactionService.getMonthlySpendingData(filteredTransactions);
+
+  // Calculate total spent and received
+  final totalSpent = filteredTransactions
+      .where((t) => t.type != 'Incoming')
+      .fold(0.0, (sum, t) => sum + t.amount);
+  final totalReceived = filteredTransactions
+      .where((t) => t.type == 'Incoming')
+      .fold(0.0, (sum, t) => sum + t.amount);
+
+  return SingleChildScrollView(
     padding: EdgeInsets.zero,
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Gradient header with summary
-        Container(
-          padding: const EdgeInsets.all(16.0),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Theme.of(context).primaryColor,
-                Theme.of(context).primaryColor.withOpacity(0.85),
-              ],
-            ),
-            borderRadius: const BorderRadius.only(
-              bottomLeft: Radius.circular(32),
-              bottomRight: Radius.circular(32),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 10,
-                offset: const Offset(0, 5),
+        _buildHeaderSection(filteredTransactions, totalSpent, totalReceived),
+        _buildMonthlySpendingChart(monthlySpendingData),
+        // Add the monthly spending table here
+        MonthlySpendingTable(
+          transactions: filteredTransactions,
+          timeFrame: _selectedTimeFrame,
+        ),
+        _buildCategoryBreakdownChart(categoryBreakdown),
+        CategorySpendingTable(
+          transactions: filteredTransactions,
+          timeFrame: _selectedTimeFrame,
+        ),
+        _buildRecentTransactions(filteredTransactions),
+        SizedBox(height: 80), // Space for the floating action button
+      ],
+    ),
+  );
+}
+
+  Widget _buildHeaderSection(List<Transaction> filteredTransactions, double totalSpent, double totalReceived) {
+    return Container(
+      padding: const EdgeInsets.all(16.0),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Theme.of(context).primaryColor,
+            Theme.of(context).primaryColor.withOpacity(0.85),
+          ],
+        ),
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(32),
+          bottomRight: Radius.circular(32),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 10,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          // Top row with summary stats
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _selectedCategory == 'All Categories' 
+                        ? 'All Transactions' 
+                        : _selectedCategory,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'KSh ${NumberFormat('#,###.00').format(totalSpent - totalReceived)}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 24,
+                      color: totalReceived > totalSpent ? Colors.green.shade300 : Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.date_range,
+                    color: Colors.white70,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: DropdownButton<String>(
+                      value: _selectedTimeFrame,
+                      dropdownColor: Theme.of(context).primaryColor,
+                      underline: Container(),
+                      icon: const Icon(Icons.arrow_drop_down, color: Colors.white),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                      ),
+                      onChanged: (String? newValue) {
+                        if (newValue != null) {
+                          setState(() {
+                            _selectedTimeFrame = newValue;
+                          });
+                        }
+                      },
+                      items: _timeFrames.map<DropdownMenuItem<String>>((String value) {
+                        return DropdownMenuItem<String>(
+                          value: value,
+                          child: Text(value),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
-          child: Column(
+          
+          const SizedBox(height: 20),
+          
+          // Stats row
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              // Top row with summary stats
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _selectedCategory == 'All Categories' 
-                            ? 'All Transactions' 
-                            : _selectedCategory,
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 14,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'KSh ${NumberFormat('#,###.00').format(totalSpent - totalReceived)}',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 24,
-                          color: totalReceived > totalSpent ? Colors.green.shade300 : Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.date_range,
-                        color: Colors.white70,
-                        size: 16,
-                      ),
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: DropdownButton<String>(
-                          value: _selectedTimeFrame,
-                          dropdownColor: Theme.of(context).primaryColor,
-                          underline: Container(),
-                          icon: const Icon(Icons.arrow_drop_down, color: Colors.white),
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
+              _StatisticItem(
+                title: 'Transactions',
+                value: filteredTransactions.length.toString(),
+                icon: Icons.receipt_long,
+                color: Colors.white,
+              ),
+              _StatisticItem(
+                title: 'Money Out',
+                value: 'KSh ${NumberFormat('#,###').format(totalSpent)}',
+                icon: Icons.arrow_upward,
+                color: Colors.red.shade300,
+              ),
+              _StatisticItem(
+                title: 'Money In',
+                value: 'KSh ${NumberFormat('#,###').format(totalReceived)}',
+                icon: Icons.arrow_downward,
+                color: Colors.green.shade300,
+              ),
+            ],
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Category filter
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: DropdownButton<String>(
+              value: _selectedCategory,
+              isExpanded: true,
+              dropdownColor: Theme.of(context).primaryColor,
+              underline: Container(),
+              icon: const Icon(Icons.filter_list, color: Colors.white),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+              ),
+              onChanged: (String? newValue) {
+                if (newValue != null) {
+                  setState(() {
+                    _selectedCategory = newValue;
+                  });
+                }
+              },
+              items: _categories.map<DropdownMenuItem<String>>((String value) {
+                return DropdownMenuItem<String>(
+                  value: value,
+                  child: Text(value),
+                );
+              }).toList(),
+            ),
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Action buttons row
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _ActionButton(
+                label: 'Import',
+                icon: Icons.upload_file,
+                onPressed: () {
+                  // Handle import action
+
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const ImportMessagesScreen(),
                           ),
-                          onChanged: (String? newValue) {
-                            if (newValue != null) {
-                              setState(() {
-                                _selectedTimeFrame = newValue;
-                              });
-                            }
-                          },
-                          items: _timeFrames.map<DropdownMenuItem<String>>((String value) {
-                            return DropdownMenuItem<String>(
-                              value: value,
-                              child: Text(value),
-                            );
-                          }).toList(),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                        );
+                },
               ),
-              
-              const SizedBox(height: 20),
-              
-              // Stats row
-              Row(
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+// Improved Monthly Spending Chart method that shows incoming vs outgoing transactions
+// Here's the improved method with fixes for the reported errors
+
+Widget _buildMonthlySpendingChart(Map<DateTime, double> monthlyData) {
+  // Track selected months for filtering
+  final List<DateTime> selectedMonths = _selectedMonths; // Use class variable to track selections
+  final List<DateTime> availableMonths = _filteredTransactions
+      .map((t) => DateTime(t.date.year, t.date.month, 1))
+      .toSet()
+      .toList()
+    ..sort((a, b) => a.compareTo(b));
+  
+  // If no months are explicitly selected, consider all months as selected
+  final bool allMonthsSelected = selectedMonths.isEmpty;
+  
+  // Create separate maps for incoming and outgoing transactions
+  final Map<DateTime, double> incomingData = {};
+  final Map<DateTime, double> outgoingData = {};
+
+  // Get incoming and outgoing data based on selected timeframe
+  for (final transaction in _filteredTransactions) {
+    final month = DateTime(transaction.date.year, transaction.date.month, 1);
+    
+    // Skip if a specific month filter is active and this month isn't selected
+    if (!allMonthsSelected && !selectedMonths.contains(month)) {
+      continue;
+    }
+    
+    if (transaction.type == 'Incoming') {
+      incomingData[month] = (incomingData[month] ?? 0) + transaction.amount;
+    } else {
+      outgoingData[month] = (outgoingData[month] ?? 0) + transaction.amount;
+    }
+  }
+
+  // Combine all dates from both datasets
+  final allDates = {...monthlyData.keys, ...incomingData.keys, ...outgoingData.keys}
+      .where((date) => allMonthsSelected || selectedMonths.contains(date))
+      .toList()
+      ..sort((a, b) => a.compareTo(b));
+  
+  // Create spot data for the charts
+  final List<FlSpot> totalSpots = [];
+  final List<FlSpot> incomingSpots = [];
+  final List<FlSpot> outgoingSpots = [];
+  
+  // Find the minimum value for Y axis (could be negative if expenses > income)
+  double minY = 0;
+  
+  for (int i = 0; i < allDates.length; i++) {
+    final date = allDates[i];
+    // Add total spending spots (net flow)
+    final double incomingAmount = incomingData[date] ?? 0;
+    final double outgoingAmount = outgoingData[date] ?? 0;
+    final double netAmount = incomingAmount - outgoingAmount;
+    
+    totalSpots.add(FlSpot(i.toDouble(), netAmount));
+    // Add incoming spots
+    incomingSpots.add(FlSpot(i.toDouble(), incomingAmount));
+    // Add outgoing spots
+    outgoingSpots.add(FlSpot(i.toDouble(), outgoingAmount));
+    
+    // Update minimum Y value if needed
+    if (netAmount < minY) {
+      minY = netAmount;
+    }
+  }
+  
+  // Find the maximum value for the Y-axis scaling
+  final allValues = [
+    ...incomingData.values, 
+    ...outgoingData.values
+  ];
+  
+  final double maxYValue = allValues.isEmpty ? 10.0 : (allValues.reduce((a, b) => a > b ? a : b) * 1.2);
+  
+  // Add some padding to the minimum Y value
+  minY = minY < 0 ? minY * 1.2 : 0;
+  
+  return Padding(
+    padding: const EdgeInsets.all(16.0),
+    child: Card(
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      color: Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  _StatisticItem(
-                    title: 'Transactions',
-                    value: filteredTransactions.length.toString(),
-                    icon: Icons.receipt_long,
-                    color: Colors.white,
+                  Text(
+                    'Transaction Analysis',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).primaryColor,
+                    ),
                   ),
-                  _StatisticItem(
-                    title: 'Money Out',
-                    value: 'KSh ${NumberFormat('#,###').format(totalSpent)}',
-                    icon: Icons.arrow_upward,
-                    color: Colors.red.shade300,
-                  ),
-                  _StatisticItem(
-                    title: 'Money In',
-                    value: 'KSh ${NumberFormat('#,###').format(totalReceived)}',
-                    icon: Icons.arrow_downward,
-                    color: Colors.green.shade300,
-                  ),
+                  _buildMonthSelectorButton(context, availableMonths),
                 ],
               ),
-              
-              const SizedBox(height: 16),
-              
-              // Category Selector
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(12),
+            ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0),
+              child: Text(
+                _getChartTitle(),
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey.shade700,
                 ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              height: 250,
+              child: allDates.isEmpty
+                  ? Center(
+                      child: Text(
+                        'No data available for the selected period',
+                        style: TextStyle(
+                          color: Colors.grey.shade600,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    )
+                  : LineChart(
+                      LineChartData(
+                        lineTouchData: LineTouchData(
+                          touchTooltipData: LineTouchTooltipData(
+                            tooltipBgColor: Colors.blueGrey.shade800,
+                            getTooltipItems: (touchedSpots) {
+                              return touchedSpots.map((touchedSpot) {
+                                final date = allDates[touchedSpot.x.toInt()];
+                                String text;
+                                Color textColor;
+                                
+                                if (touchedSpot.barIndex == 0) {
+                                  text = 'Net: KSh ${NumberFormat('#,###').format(touchedSpot.y)}';
+                                  textColor = Theme.of(context).primaryColor;
+                                } else if (touchedSpot.barIndex == 1) {
+                                  text = 'Income: KSh ${NumberFormat('#,###').format(touchedSpot.y)}';
+                                  textColor = Colors.green;
+                                } else {
+                                  text = 'Expense: KSh ${NumberFormat('#,###').format(touchedSpot.y)}';
+                                  textColor = Colors.red;
+                                }
+                                
+                                return LineTooltipItem(
+                                  '${DateFormat('MMM yyyy').format(date)}\n$text',
+                                  TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  textAlign: TextAlign.left,
+                                  children: [
+                                    TextSpan(
+                                      text: '',
+                                      style: TextStyle(
+                                        color: textColor,
+                                        fontWeight: FontWeight.normal,
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              }).toList();
+                            },
+                          ),
+                          handleBuiltInTouches: true,
+                        ),
+                        gridData: FlGridData(
+                          show: true,
+                          drawVerticalLine: true,
+                          horizontalInterval: (maxYValue - minY) / 5,
+                          getDrawingHorizontalLine: (value) {
+                            return FlLine(
+                              color: Colors.grey.shade200,
+                              strokeWidth: 1,
+                              dashArray: [5, 5],
+                            );
+                          },
+                          getDrawingVerticalLine: (value) {
+                            return FlLine(
+                              color: Colors.grey.shade200,
+                              strokeWidth: 1,
+                            );
+                          },
+                        ),
+                        titlesData: FlTitlesData(
+                          show: true,
+                          rightTitles: AxisTitles(
+                            sideTitles: SideTitles(showTitles: false),
+                          ),
+                          topTitles: AxisTitles(
+                            sideTitles: SideTitles(showTitles: false),
+                          ),
+                          bottomTitles: AxisTitles(
+                            sideTitles: SideTitles(
+                              showTitles: true,
+                              reservedSize: 30,
+                              interval: 1,
+                              getTitlesWidget: (value, meta) {
+                                if (value.toInt() >= 0 && value.toInt() < allDates.length) {
+                                  final date = allDates[value.toInt()];
+                                  // Use different format based on timeframe
+                                  String format = _selectedTimeFrame == 'Last Month' ? 'dd MMM' : 'MMM yy';
+                                  return Padding(
+                                    padding: const EdgeInsets.only(top: 8.0),
+                                    child: Text(
+                                      DateFormat(format).format(date),
+                                      style: TextStyle(
+                                        color: Colors.grey.shade600,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  );
+                                }
+                                return const Text('');
+                              },
+                            ),
+                          ),
+                          leftTitles: AxisTitles(
+                            sideTitles: SideTitles(
+                              showTitles: true,
+                              interval: (maxYValue - minY) / 5,
+                              getTitlesWidget: (value, meta) {
+                                return Padding(
+                                  padding: const EdgeInsets.only(right: 8.0),
+                                  child: Text(
+                                    value >= 1000 ? '${(value / 1000).toStringAsFixed(1)}K' : value.toStringAsFixed(0),
+                                    style: TextStyle(
+                                      color: Colors.grey.shade600,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                );
+                              },
+                              reservedSize: 40,
+                            ),
+                          ),
+                        ),
+                        borderData: FlBorderData(
+                          show: true,
+                          border: Border.all(color: Colors.grey.shade200),
+                        ),
+                        minX: 0,
+                        maxX: (allDates.length - 1).toDouble(),
+                        minY: minY, // Use calculated minimum Y value
+                        maxY: maxYValue,
+                        clipData: FlClipData.all(), // This ensures the chart content is clipped to the chart area
+                        lineBarsData: [
+                          // Net line (total)
+                          LineChartBarData(
+                            spots: totalSpots,
+                            isCurved: true,
+                            gradient: LinearGradient(
+                              colors: [
+                                Theme.of(context).primaryColor.withOpacity(0.8),
+                                Theme.of(context).primaryColor,
+                              ],
+                            ),
+                            barWidth: 3,
+                            isStrokeCapRound: true,
+                            dotData: FlDotData(
+                              show: false,
+                            ),
+                            belowBarData: BarAreaData(
+                              show: true,
+                              gradient: LinearGradient(
+                                colors: [
+                                  Theme.of(context).primaryColor.withOpacity(0.2),
+                                  Theme.of(context).primaryColor.withOpacity(0.0),
+                                ],
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                              ),
+                              // Only fill when y values are positive
+                              cutOffY: 0,
+                              applyCutOffY: true,
+                            ),
+                            aboveBarData: minY < 0 ? BarAreaData(
+                              show: true,
+                              gradient: LinearGradient(
+                                colors: [
+                                  Theme.of(context).primaryColor.withOpacity(0.2),
+                                  Theme.of(context).primaryColor.withOpacity(0.0),
+                                ],
+                                begin: Alignment.bottomCenter,
+                                end: Alignment.topCenter,
+                              ),
+                              // Only fill when y values are negative
+                              cutOffY: 0,
+                              applyCutOffY: true,
+                            ) : null,
+                          ),
+                          // Incoming line
+                          LineChartBarData(
+                            spots: incomingSpots,
+                            isCurved: true,
+                            gradient: const LinearGradient(
+                              colors: [
+                                Colors.green,
+                                Color(0xFF4CAF50),
+                              ],
+                            ),
+                            barWidth: 3,
+                            isStrokeCapRound: true,
+                            dotData: FlDotData(
+                              show: false,
+                            ),
+                            belowBarData: BarAreaData(
+                              show: true,
+                              gradient: LinearGradient(
+                                colors: [
+                                  Colors.green.withOpacity(0.2),
+                                  Colors.green.withOpacity(0.0),
+                                ],
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                              ),
+                              cutOffY: 0,
+                              applyCutOffY: true,
+                            ),
+                          ),
+                          // Outgoing line
+                          LineChartBarData(
+                            spots: outgoingSpots,
+                            isCurved: true,
+                            gradient: const LinearGradient(
+                              colors: [
+                                Colors.red,
+                                Color(0xFFE57373),
+                              ],
+                            ),
+                            barWidth: 3,
+                            isStrokeCapRound: true,
+                            dotData: FlDotData(
+                              show: false,
+                            ),
+                            belowBarData: BarAreaData(
+                              show: true,
+                              gradient: LinearGradient(
+                                colors: [
+                                  Colors.red.withOpacity(0.2),
+                                  Colors.red.withOpacity(0.0),
+                                ],
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                              ),
+                              cutOffY: 0,
+                              applyCutOffY: true,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+            ),
+            const SizedBox(height: 16),
+            // Legend
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _buildLegendItem(
+                  color: Theme.of(context).primaryColor,
+                  label: 'Net Flow',
+                ),
+                const SizedBox(width: 24),
+                _buildLegendItem(
+                  color: Colors.green,
+                  label: 'Income',
+                ),
+                const SizedBox(width: 24),
+                _buildLegendItem(
+                  color: Colors.red,
+                  label: 'Expenses',
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+String _getChartTitle() {
+  switch (_selectedTimeFrame) {
+    case 'Last Month':
+      return 'Daily spending for the last month';
+    case 'Last 3 Months':
+      return 'Monthly spending for the last 3 months';
+    case 'Last 6 Months':
+      return 'Monthly spending for the last 6 months';
+    case 'Last Year':
+      return 'Monthly spending for the last year';
+    default:
+      return 'Monthly spending trend';
+  }
+}
+
+// Also update the month selector button to use the class variable
+Widget _buildMonthSelectorButton(BuildContext context, List<DateTime> availableMonths) {
+  return ElevatedButton.icon(
+    onPressed: () {
+      _showMonthSelectionDialog(context, availableMonths);
+    },
+    icon: const Icon(Icons.calendar_month, size: 16),
+    label: const Text('Select Months'),
+    style: ElevatedButton.styleFrom(
+      backgroundColor: Theme.of(context).primaryColor,
+      foregroundColor: Colors.white,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+      ),
+    ),
+  );
+}
+
+// Update month selection dialog to use class variable
+void _showMonthSelectionDialog(BuildContext context, List<DateTime> availableMonths) {
+  // Create a temporary list to track selections in the dialog
+  final List<DateTime> tempSelected = List.from(_selectedMonths);
+  
+  showDialog(
+    context: context,
+    builder: (BuildContext context) {
+      return StatefulBuilder(
+        builder: (context, setState) {
+          return AlertDialog(
+            title: const Text('Select Months'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: availableMonths.length,
+                itemBuilder: (context, index) {
+                  final month = availableMonths[index];
+                  final isSelected = tempSelected.contains(month);
+                  
+                  return CheckboxListTile(
+                    title: Text(DateFormat('MMMM yyyy').format(month)),
+                    value: isSelected,
+                    activeColor: Theme.of(context).primaryColor,
+                    onChanged: (bool? value) {
+                      setState(() {
+                        if (value == true) {
+                          tempSelected.add(month);
+                        } else {
+                          tempSelected.remove(month);
+                        }
+                      });
+                    },
+                  );
+                },
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                },
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () {
+                  // Apply the selections
+                  _selectedMonths.clear();
+                  _selectedMonths.addAll(tempSelected);
+                  Navigator.of(context).pop();
+                  
+                  // Refresh the chart state
+                  this.setState(() {});
+                },
+                child: const Text('Apply'),
+              ),
+              TextButton(
+                onPressed: () {
+                  // Clear all selections
+                  tempSelected.clear();
+                  setState(() {});
+                },
+                child: const Text('Clear All'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
+Widget _buildLegendItem({required Color color, required String label}) {
+  return Row(
+    children: [
+      Container(
+        width: 16,
+        height: 4,
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(2),
+        ),
+      ),
+      const SizedBox(width: 8),
+      Text(
+        label,
+        style: TextStyle(
+          color: Colors.grey.shade700,
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    ],
+  );
+}
+
+
+  Widget _buildCategoryBreakdownChart(Map<String, double> breakdown) {
+    final List<Color> chartColors = [
+      Theme.of(context).primaryColor,
+      Colors.orange,
+      Colors.blue,
+      Colors.purple,
+      Colors.amber,
+      Colors.pink,
+      Colors.teal,
+      Colors.indigo,
+      Colors.blueGrey,
+    ];
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+      child: Card(
+        elevation: 4,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        color: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Text(
+                  'Category Breakdown',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).primaryColor,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 300,
+                child: breakdown.isEmpty
+                    ? Center(
+                        child: Text(
+                          'No data available',
+                          style: TextStyle(color: Colors.grey[600]),
+                        ),
+                      )
+                    : PieChart(
+                        PieChartData(
+                          sectionsSpace: 2,
+                          centerSpaceRadius: 60,
+                          sections: _getPieChartSections(breakdown, chartColors),
+                        ),
+                      ),
+              ),
+              const SizedBox(height: 16),
+              _buildChartLegend(breakdown, chartColors),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<PieChartSectionData> _getPieChartSections(Map<String, double> breakdown, List<Color> colors) {
+    final totalAmount = breakdown.values.fold(0.0, (sum, value) => sum + value);
+    
+    List<PieChartSectionData> sections = [];
+    int colorIndex = 0;
+    
+    breakdown.forEach((category, amount) {
+      final percentage = (amount / totalAmount) * 100;
+      final color = colors[colorIndex % colors.length];
+      colorIndex++;
+      
+      sections.add(
+        PieChartSectionData(
+          color: color,
+          value: amount,
+          title: '${percentage.toStringAsFixed(1)}%',
+          radius: 100,
+          titleStyle: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+      );
+    });
+    
+    return sections;
+  }
+
+
+
+  Widget _buildChartLegend(Map<String, double> breakdown, List<Color> colors) {
+    return Wrap(
+      spacing: 16.0,
+      runSpacing: 8.0,
+      children: breakdown.keys.toList().asMap().entries.map((entry) {
+        final index = entry.key;
+        final category = entry.value;
+        final color = colors[index % colors.length];
+        
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(
+                color: color,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              category,
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey[800],
+              ),
+            ),
+          ],
+        );
+      }).toList(),
+    );
+  }
+
+
+  Widget _buildRecentTransactions(List<Transaction> transactions) {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Card(
+        elevation: 4,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        color: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(8.0),
                 child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Icon(Icons.category, color: Colors.white70),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: DropdownButton<String>(
-                        isExpanded: true,
-                        value: _selectedCategory,
-                        underline: Container(),
-                        dropdownColor: Theme.of(context).primaryColor,
-                        style: const TextStyle(color: Colors.white),
-                        hint: const Text('Select Category', style: TextStyle(color: Colors.white70)),
-                        icon: const Icon(Icons.arrow_drop_down, color: Colors.white),
-                        onChanged: (String? newValue) {
-                          if (newValue != null) {
-                            setState(() {
-                              _selectedCategory = newValue;
-                            });
-                          }
-                        },
-                        items: _categories.map<DropdownMenuItem<String>>((String value) {
-                          return DropdownMenuItem<String>(
-                            value: value,
-                            child: Text(value),
-                          );
-                        }).toList(),
+                    Text(
+                      'Recent Transactions',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Theme.of(context).primaryColor,
                       ),
                     ),
                   ],
                 ),
               ),
-            ],
-          ),
-        ),
-        
-        const SizedBox(height: 24),
-        
-        // Spending Over Time
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: const [
-              Text(
-                'Spending Over Time',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF2D3142),
-                ),
-              ),
-            ],
-          ),
-        ),
-        
-        const SizedBox(height: 16),
-        
-        // Monthly Spending Chart
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Card(
-            elevation: 2,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    height: 250,
-                    child: _buildMonthlySpendingChart(monthlySpendingData),
-                  ),
-                  const SizedBox(height: 8),
-                  const Center(
-                    child: Text(
-                      'Monthly Transaction Flow',
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        
-        const SizedBox(height: 24),
-        
-        // Category Breakdown
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: const [
-              Text(
-                'Spending by Category',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF2D3142),
-                ),
-              ),
-            ],
-          ),
-        ),
-        
-        const SizedBox(height: 16),
-        
-        // Category Breakdown Chart
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Card(
-            elevation: 2,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    height: 250,
-                    child: _buildCategoryBreakdownChart(categoryBreakdown),
-                  ),
-                  const SizedBox(height: 16),
-                  // Legend
-                  Wrap(
-                    spacing: 16.0,
-                    runSpacing: 8.0,
-                    children: categoryBreakdown.map((category) => _buildLegendItem(
-                      category.category,
-                      _getCategoryColor(category.category),
-                    )).toList(),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        
-        const SizedBox(height: 24),
-        
-        // Transaction Types
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: const [
-              Text(
-                'Transaction Types',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF2D3142),
-                ),
-              ),
-            ],
-          ),
-        ),
-        
-        const SizedBox(height: 16),
-        
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Card(
-            elevation: 2,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    height: 200,
-                    child: _buildTransactionTypeChart(filteredTransactions),
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      _buildLegendItem('Send', Colors.orange),
-                      const SizedBox(width: 16),
-                      _buildLegendItem('Receive', Colors.green),
-                      const SizedBox(width: 16),
-                      _buildLegendItem('Paybill', Colors.blue),
-                      const SizedBox(width: 16),
-                      _buildLegendItem('Withdraw', Colors.purple),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        
-        const SizedBox(height: 24),
-        
-        // Recent Transactions
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Recent Transactions',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF2D3142),
-                ),
-              ),
-              TextButton(
-                onPressed: () {},
-                child: const Text('View All'),
-                style: TextButton.styleFrom(
-                  foregroundColor: Theme.of(context).primaryColor,
-                ),
-              ),
-            ],
-          ),
-        ),
-        
-        const SizedBox(height: 16),
-        
-        // Recent Transactions List
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Card(
-            elevation: 2,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: filteredTransactions.length > 5 ? 5 : filteredTransactions.length,
-              separatorBuilder: (context, index) => const Divider(height: 1),
-              itemBuilder: (context, index) {
-                final transaction = filteredTransactions[index];
-                return ListTile(
-                  leading: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: _getTypeColor(transaction.type).withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      _getTypeIcon(transaction.type),
-                      color: _getTypeColor(transaction.type),
-                    ),
-                  ),
-                  title: Text(transaction.recipient),
-                  subtitle: Text(
-                    '${transaction.category} • ${DateFormat('dd MMM yyyy').format(transaction.date)}',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  trailing: Text(
-                    'KSh ${NumberFormat('#,###.00').format(transaction.amount)}',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: transaction.type == 'receive' ? Colors.green : Colors.red,
-                    ),
-                  ),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => TransactionDetailsScreen(
-                          transaction: transaction,
+              const SizedBox(height: 8),
+              transactions.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20.0),
+                        child: Text(
+                          'No transactions found',
+                          style: TextStyle(color: Colors.grey[600]),
                         ),
                       ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        ),
-        
-        const SizedBox(height: 24),
-        
-        // Spending Insights
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: const [
-              Text(
-                'Spending Insights',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF2D3142),
-                ),
-              ),
+                    )
+                  : Column(
+                      children: transactions.map((transaction) => _buildTransactionTile(transaction)).toList(),
+                    ),
             ],
           ),
         ),
-        
-        const SizedBox(height: 16),
-        
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Card(
-            elevation: 2,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                children: [
-                  _InsightTile(
-                    icon: Icons.trending_up,
-                    color: Colors.red,
-                    title: 'Spending Trend',
-                    description: _getSpendingTrendInsight(monthlySpendingData),
-                  ),
-                  const Divider(),
-                  _InsightTile(
-                    icon: Icons.category,
-                    color: Colors.blue,
-                    title: 'Top Spending',
-                    description: _getTopSpendingInsight(categoryBreakdown),
-                  ),
-                  const Divider(),
-                  _InsightTile(
-                    icon: Icons.calendar_today,
-                    color: Colors.purple,
-                    title: 'Transaction Frequency',
-                    description: _getTransactionFrequencyInsight(filteredTransactions),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        
-        const SizedBox(height: 24),
-        
-        // Financial Tips
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Card(
-            elevation: 2,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            color: Theme.of(context).primaryColor.withOpacity(0.1),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.lightbulb, color: Theme.of(context).primaryColor),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Financial Tips',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                          color: Theme.of(context).primaryColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  _buildTipItem(
-                    _getPersonalizedTip(filteredTransactions, categoryBreakdown),
-                  ),
-                  _buildTipItem(
-                    'Setting up automatic savings can help you build wealth over time',
-                  ),
-                  _buildTipItem(
-                    'Track your expenses regularly to identify areas where you can reduce spending',
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        
-        const SizedBox(height: 80), // Bottom padding for FAB
-      ],
-    ),
-  ),
-  floatingActionButton: FloatingActionButton.extended(
-    onPressed: () {},
-    icon: const Icon(Icons.download),
-    label: const Text(
-      'Export Report',
-      style: TextStyle(
-        fontWeight: FontWeight.w600,
-        letterSpacing: 0.5,
       ),
-    ),
-    elevation: 4,
-    backgroundColor: Theme.of(context).primaryColor,
-  ),
-  floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
-);
+    );
   }
-  
-  Widget _buildMonthlySpendingChart(List<MonthlyTransactionData> data) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 16.0, left: 6.0, top: 24.0, bottom: 12.0),
-      child: LineChart(
-        LineChartData(
-          gridData: FlGridData(
-            show: true,
-            horizontalInterval: 10000,
-            getDrawingHorizontalLine: (value) {
-              return FlLine(
-                color: Colors.grey.shade200,
-                strokeWidth: 1,
-              );
-            },
+
+  Widget _buildTransactionTile(Transaction transaction) {
+    final bool isIncome = transaction.type == 'Incoming';
+    final color = isIncome ? Colors.green : Colors.red;
+    
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        leading: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: color.withOpacity(0.1),
           ),
-          titlesData: FlTitlesData(
-            show: true,
-            rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 30,
-                interval: 1,
-                getTitlesWidget: (value, meta) {
-                  if (value.toInt() >= 0 && value.toInt() < data.length) {
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 8.0),
-                      child: Text(
-                        data[value.toInt()].month,
-                        style: const TextStyle(
-                          color: Colors.grey,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
-                      ),
-                    );
-                  }
-                  return const SizedBox();
-                },
+          child: Icon(
+            TransactionService.getTypeIcon(transaction.type),
+            color: color,
+            size: 20,
+          ),
+        ),
+        title: Text(
+          transaction.recipient,
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+        ),
+        subtitle: Text(
+          DateFormat('MMM dd, yyyy').format(transaction.date),
+          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+        ),
+        trailing: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              'KSh ${NumberFormat('#,##0.00').format(transaction.amount)}',
+              style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.bold,
+                fontSize: 15,
               ),
             ),
-            leftTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                interval: 10000,
-                reservedSize: 42,
-                getTitlesWidget: (value, meta) {
-                  return Text(
-                    NumberFormat.compact().format(value),
-                    style: const TextStyle(
-                      color: Colors.grey,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  );
-                },
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: Theme.of(context).primaryColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
               ),
-            ),
-          ),
-          borderData: FlBorderData(
-            show: true,
-            border: Border.all(color: Colors.grey.shade200),
-          ),
-          minX: 0,
-          maxX: data.length - 1.0,
-          minY: 0,
-          lineTouchData: LineTouchData(
-            touchTooltipData: LineTouchTooltipData(
-              tooltipBgColor: Colors.blueGrey,
-              getTooltipItems: (List<LineBarSpot> touchedSpots) {
-                return touchedSpots.map((spot) {
-                  final flSpot = spot;
-                  if (spot.barIndex == 0) {
-                    return LineTooltipItem(
-                      'In: KSh ${NumberFormat('#,###').format(data[flSpot.x.toInt()].received)}',
-                      const TextStyle(color: Colors.green, fontWeight: FontWeight.bold),
-                    );
-                  } else {
-                    return LineTooltipItem(
-                      'Out: KSh ${NumberFormat('#,###').format(data[flSpot.x.toInt()].spent)}',
-                      const TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
-                    );
-                  }
-                }).toList();
-              },
-            ),
-          ),
-          lineBarsData: [
-            // Money In
-            LineChartBarData(
-              spots: List.generate(data.length, (i) {
-                return FlSpot(i.toDouble(), data[i].received);
-              }),
-              isCurved: true,
-              color: Colors.green,
-              barWidth: 3,
-              isStrokeCapRound: true,
-              dotData: FlDotData(show: false),
-              belowBarData: BarAreaData(
-                show: true,
-                color: Colors.green.withOpacity(0.1),
-              ),
-            ),
-            // Money Out
-            LineChartBarData(
-              spots: List.generate(data.length, (i) {
-                return FlSpot(i.toDouble(), data[i].spent);
-              }),
-              isCurved: true,
-              color: Colors.red,
-              barWidth: 3,
-              isStrokeCapRound: true,
-              dotData: FlDotData(show: false),
-              belowBarData: BarAreaData(
-                show: true,
-                color: Colors.red.withOpacity(0.1),
+              child: Text(
+                transaction.category,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w500,
+                  color: Theme.of(context).primaryColor,
+                ),
               ),
             ),
           ],
@@ -733,567 +1054,17 @@ class _TransactionAnalysisScreenState extends State<TransactionAnalysisScreen> {
       ),
     );
   }
-  
-  Widget _buildCategoryBreakdownChart(List<CategoryBreakdown> data) {
-    // Calculate total for percentages
-    final totalAmount = data.fold(0.0, (sum, item) => sum + item.amount);
-    
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: PieChart(
-        PieChartData(
-          sections: data.map((category) {
-            final percentage = (category.amount / totalAmount) * 100;
-            return PieChartSectionData(
-              color: _getCategoryColor(category.category),
-              value: category.amount,
-              title: '${percentage.toStringAsFixed(1)}%',
-              radius: 100,
-              titleStyle: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
-            );
-          }).toList(),
-          centerSpaceRadius: 40,
-          sectionsSpace: 2,
-          pieTouchData: PieTouchData(
-            touchCallback: (FlTouchEvent event, pieTouchResponse) {},
-          ),
-        ),
-      ),
-    );
-  }
-  
-  Widget _buildTransactionTypeChart(List<Transaction> transactions) {
-    // Count transactions by type
-    Map<String, int> typeCounts = {};
-    for (var transaction in transactions) {
-      if (typeCounts.containsKey(transaction.type)) {
-        typeCounts[transaction.type] = typeCounts[transaction.type]! + 1;
-      } else {
-        typeCounts[transaction.type] = 1;
-      }
-    }
-    
-    // Calculate total for percentages
-    final total = typeCounts.values.fold(0, (sum, count) => sum + count);
-    
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: BarChart(
-        BarChartData(
-          alignment: BarChartAlignment.spaceAround,
-          maxY: typeCounts.values.isEmpty 
-              ? 10 
-              : typeCounts.values.reduce((a, b) => a > b ? a : b) * 1.2,
-          barTouchData: BarTouchData(
-            enabled: true,
-            touchTooltipData: BarTouchTooltipData(
-              tooltipBgColor: Colors.blueGrey.shade700,
-              getTooltipItem: (group, groupIndex, rod, rodIndex) {
-                String type = typeCounts.keys.elementAt(groupIndex);
-                int count = typeCounts.values.elementAt(groupIndex);
-                double percentage = (count / total) * 100;
-                return BarTooltipItem(
-                  '$type: $count (${percentage.toStringAsFixed(1)}%)',
-                  const TextStyle(color: Colors.white),
-                );
-              },
-            ),
-          ),
-          titlesData: FlTitlesData(
-            show: true,
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                getTitlesWidget: (value, meta) {
-                  if (value.toInt() >= 0 && value.toInt() < typeCounts.length) {
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 8.0),
-                      child: Text(
-                        typeCounts.keys.elementAt(value.toInt()).capitalize(),
-                        style: const TextStyle(
-                          color: Colors.grey,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
-                      ),
-                    );
-                  }
-                  return const SizedBox();
-                },
-                reservedSize: 28,
-              ),
-            ),
-            leftTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 30,
-                getTitlesWidget: (value, meta) {
-                  if (value % 1 == 0) {
-                    return Text(
-                      value.toInt().toString(),
-                      style: const TextStyle(
-                        color: Colors.grey,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                      ),
-                    );
-                  }
-                  return const SizedBox();
-                },
-              ),
-            ),
-            topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          ),
-          borderData: FlBorderData(
-            show: false,
-          ),
-          gridData: FlGridData(
-            show: true,
-            horizontalInterval: 1,
-            getDrawingHorizontalLine: (value) {
-              return FlLine(
-                color: Colors.grey.shade200,
-                strokeWidth: 1,
-              );
-            },
-          ),
-          barGroups: typeCounts.entries.map((e) {
-            final index = typeCounts.keys.toList().indexOf(e.key);
-            return BarChartGroupData(
-              x: index,
-              barRods: [
-                BarChartRodData(
-                  toY: e.value.toDouble(),
-                  color: _getTypeColor(e.key),
-                  width: 30,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(6),
-                    topRight: Radius.circular(6),
-                  ),
-                ),
-              ],
-            );
-          }).toList(),
-        ),
-      ),
-    );
-  }
-  
-  Widget _buildLegendItem(String label, Color color) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 16,
-          height: 16,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-          ),
-        ),
-        const SizedBox(width: 4),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 12),
-        ),
-      ],
-    );
-  }
-  
-  Widget _buildTipItem(String tip) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('• ', style: TextStyle(fontWeight: FontWeight.bold)),
-          Expanded(child: Text(tip)),
-        ],
-      ),
-    );
-  }
 
-  List<CategoryBreakdown> _getCategoryBreakdown(List<Transaction> transactions) {
-    final Map<String, double> categoryMap = {};
-    
-    for (var transaction in transactions) {
-      // For spending analysis, we only consider outgoing transactions
-      if (transaction.type != 'receive') {
-        if (categoryMap.containsKey(transaction.category)) {
-          categoryMap[transaction.category] = 
-              categoryMap[transaction.category]! + transaction.amount;
-        } else {
-          categoryMap[transaction.category] = transaction.amount;
-        }
-      }
-    }
-    
-    return categoryMap.entries
-        .map((entry) => CategoryBreakdown(entry.key, entry.value))
-        .toList();
-  }
-  
-  List<MonthlyTransactionData> _getMonthlySpendingData(List<Transaction> transactions) {
-    final Map<String, MonthlyTransactionData> monthlyMap = {};
-    final now = DateTime.now();
-    int monthsToShow = 6;
-    
-    switch (_selectedTimeFrame) {
-      case 'Last Month':
-        monthsToShow = 1;
-        break;
-      case 'Last 3 Months':
-        monthsToShow = 3;
-        break;
-      case 'Last 6 Months':
-        monthsToShow = 6;
-        break;
-      case 'Last Year':
-        monthsToShow = 12;
-        break;
-    }
-    
-    // Initialize with empty data for last N months
-    for (int i = 0; i < monthsToShow; i++) {
-      final month = DateTime(now.year, now.month - i, 1);
-      final monthStr = DateFormat('MMM').format(month);
-      monthlyMap[monthStr] = MonthlyTransactionData(monthStr, 0, 0);
-    }
-    
-    // Fill with actual data
-    for (var transaction in transactions) {
-      final date = transaction.date;
-      if (date.isAfter(DateTime(now.year, now.month - monthsToShow, now.day))) {
-        final monthStr = DateFormat('MMM').format(date);
-        if (monthlyMap.containsKey(monthStr)) {
-          var existingData = monthlyMap[monthStr]!;
-          if (transaction.type == 'receive') {
-            monthlyMap[monthStr] = MonthlyTransactionData(
-              monthStr, 
-              existingData.spent, 
-              existingData.received + transaction.amount
-            );
-          } else {
-            monthlyMap[monthStr] = MonthlyTransactionData(
-              monthStr, 
-              existingData.spent + transaction.amount, 
-              existingData.received
-            );
-          }
-        }
-      }
-    }
-    
-    // Convert to list and sort by date
-    final List<MonthlyTransactionData> result = [];
-    for (int i = 0; i < monthsToShow; i++) {
-      final month = DateTime(now.year, now.month - i, 1);
-      final monthStr = DateFormat('MMM').format(month);
-      if (monthlyMap.containsKey(monthStr)) {
-        result.add(monthlyMap[monthStr]!);
-      }
-    }
-    
-    // Reverse to show oldest month first
-    return result.reversed.toList();
-  }
-  
-  Color _getCategoryColor(String category) {
-    switch (category) {
-      case 'Utilities':
-        return Colors.yellow.shade800;
-      case 'Bills':
-        return Colors.blue;
-      case 'Family':
-        return Colors.pink;
-      case 'Friends':
-        return Colors.purple;
-      case 'Food':
-        return Colors.orange;
-      case 'Transport':
-        return Colors.teal;
-      case 'Salary':
-      case 'Income':
-        return Colors.green;
-      case 'Cash':
-        return Colors.grey.shade700;
-      default:
-        return Colors.indigo;
-    }
-  }
-  
-  Color _getTypeColor(String type) {
-    switch (type) {
-      case 'send':
-        return Colors.orange;
-      case 'receive':
-        return Colors.green;
-      case 'paybill':
-        return Colors.blue;
-      case 'withdraw':
-        return Colors.purple;
-      default:
-        return Colors.grey;
-    }
-  }
-  
-  IconData _getTypeIcon(String type) {
-    switch (type) {
-      case 'send':
-        return Icons.arrow_upward;
-      case 'receive':
-        return Icons.arrow_downward;
-      case 'paybill':
-        return Icons.receipt;
-      case 'withdraw':
-        return Icons.money;
-      default:
-        return Icons.swap_horiz;
-    }
-  }
-  
-  String _getSpendingTrendInsight(List<MonthlyTransactionData> data) {
-    if (data.length < 2) return 'Not enough data to determine trend';
-    
-    double spendingDifference = 0;
-    int count = 0;
-    
-    for (int i = 1; i < data.length; i++) {
-      spendingDifference += data[i].spent - data[i-1].spent;
-      count++;
-    }
-    
-    double avgDifference = count > 0 ? spendingDifference / count : 0;
-    
-  if (avgDifference > 500) {
-      return 'Your spending has been increasing recently. Consider reviewing your budget.';
-    } else if (avgDifference < -500) {
-      return 'Your spending has been decreasing recently. Great job managing your expenses!';
-    } else {
-      return 'Your spending has been relatively stable in recent months.';
-    }
-  }
-  
-  String _getTopSpendingInsight(List<CategoryBreakdown> data) {
-    if (data.isEmpty) return 'No spending data available';
-    
-    // Sort categories by amount spent (descending)
-    data.sort((a, b) => b.amount.compareTo(a.amount));
-    
-    if (data.length >= 2) {
-      final topCategory = data[0];
-      final secondCategory = data[1];
-      
-      final topPercentage = (topCategory.amount / data.fold(0.0, (sum, item) => sum + item.amount)) * 100;
-      
-      return 'Your highest spending category is ${topCategory.category} (${topPercentage.toStringAsFixed(1)}%), followed by ${secondCategory.category}.';
-    } else if (data.length == 1) {
-      return 'Your only spending category is ${data[0].category}.';
-    } else {
-      return 'No spending data available';
-    }
-  }
-  
-  String _getTransactionFrequencyInsight(List<Transaction> transactions) {
-    if (transactions.isEmpty) return 'No transaction data available';
-    
-    // Count transactions by day of week
-    Map<int, int> dayOfWeekCounts = {};
-    for (var transaction in transactions) {
-      final dayOfWeek = transaction.date.weekday;
-      if (dayOfWeekCounts.containsKey(dayOfWeek)) {
-        dayOfWeekCounts[dayOfWeek] = dayOfWeekCounts[dayOfWeek]! + 1;
-      } else {
-        dayOfWeekCounts[dayOfWeek] = 1;
-      }
-    }
-    
-    // Find the most common day of week
-    int? mostCommonDay;
-    int maxCount = 0;
-    dayOfWeekCounts.forEach((day, count) {
-      if (count > maxCount) {
-        maxCount = count;
-        mostCommonDay = day;
-      }
-    });
-    
-    if (mostCommonDay != null) {
-      final dayName = _getDayName(mostCommonDay!);
-      return 'You make most of your transactions on $dayName.';
-    } else {
-      return 'Your transactions are evenly distributed throughout the week.';
-    }
-  }
-  
-  String _getDayName(int dayOfWeek) {
-    switch (dayOfWeek) {
-      case 1: return 'Monday';
-      case 2: return 'Tuesday';
-      case 3: return 'Wednesday';
-      case 4: return 'Thursday';
-      case 5: return 'Friday';
-      case 6: return 'Saturday';
-      case 7: return 'Sunday';
-      default: return 'Unknown';
-    }
-  }
-  
-  String _getPersonalizedTip(List<Transaction> transactions, List<CategoryBreakdown> categories) {
-    if (categories.isEmpty) return 'Start categorizing your transactions to get personalized insights';
-    
-    // Find highest spending category
-    categories.sort((a, b) => b.amount.compareTo(a.amount));
-    final topCategory = categories[0].category;
-    
-    switch (topCategory) {
-      case 'Food':
-        return 'Consider meal planning to reduce your food expenses';
-      case 'Transport':
-        return 'Look into carpooling or public transport options to save on transportation costs';
-      case 'Utilities':
-        return 'Check for energy-saving opportunities to reduce your utility bills';
-      case 'Bills':
-        return 'Review your subscription services to eliminate unused memberships';
-      case 'Friends':
-        return 'Set a budget for social activities to manage your entertainment expenses';
-      case 'Family':
-        return 'Consider creating a shared family budget to track household expenses';
-      default:
-        return 'Focus on your ${topCategory.toLowerCase()} spending to improve your financial health';
-    }
-  }
-}
-
-class _StatisticItem extends StatelessWidget {
-  final String title;
-  final String value;
-  final IconData icon;
-  final Color color;
-  
-  const _StatisticItem({
-    required this.title,
-    required this.value,
-    required this.icon,
-    required this.color,
-  });
-  
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.2),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(
-            icon,
-            color: color,
-            size: 20,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          title,
-          style: const TextStyle(
-            color: Colors.grey,
-            fontSize: 12,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: const TextStyle(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _InsightTile extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  final String title;
-  final String description;
-  
-  const _InsightTile({
-    required this.icon,
-    required this.color,
-    required this.title,
-    required this.description,
-  });
-  
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.2),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Icon(
-          icon,
-          color: color,
-        ),
-      ),
-      title: Text(
-        title,
-        style: const TextStyle(
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-      subtitle: Text(
-        description,
-        style: const TextStyle(
-          color: Colors.grey,
-        ),
-      ),
-    );
-  }
-}
-
-class CategoryBreakdown {
-  final String category;
-  final double amount;
-  
-  CategoryBreakdown(this.category, this.amount);
-}
-
-class MonthlyTransactionData {
-  final String month;
-  final double spent;
-  final double received;
-  
-  MonthlyTransactionData(this.month, this.spent, this.received);
-}
-class TransactionDetailsScreen extends StatelessWidget {
-  final Transaction transaction;
-  
-  const TransactionDetailsScreen({
-    Key? key,
-    required this.transaction,
-  }) : super(key: key);
-  
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFFF5F7FA), // Light gray background
       appBar: AppBar(
         title: const Text(
-          'Transaction Details',
+          'Transaction Analysis',
           style: TextStyle(
             fontWeight: FontWeight.w500,
-            fontSize: 20,
+            fontSize: 22,
             fontFamily: 'Poppins',
             color: Colors.white,
           ),
@@ -1301,311 +1072,704 @@ class TransactionDetailsScreen extends StatelessWidget {
         centerTitle: true,
         elevation: 0,
         backgroundColor: Theme.of(context).primaryColor,
+        
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header with amount and transaction type
-            Center(
-              child: Column(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: _getTypeColor(transaction.type).withOpacity(0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      _getTypeIcon(transaction.type),
-                      color: _getTypeColor(transaction.type),
-                      size: 36,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'KSh ${NumberFormat('#,###.00').format(transaction.amount)}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 32,
-                      height: 1.2,
-                      color: Color(0xFF1A1A1A),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _getTransactionTypeText(transaction.type),
-                    style: TextStyle(
-                      color: _getTypeColor(transaction.type),
-                      fontWeight: FontWeight.w600,
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    DateFormat('EEEE, dd MMMM yyyy, hh:mm a').format(transaction.date),
-                    style: const TextStyle(
-                      color: Color(0xFF757575),
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            
-            const SizedBox(height: 32),
-            
-            // Transaction details
-            const Text(
-              'TRANSACTION DETAILS',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF757575),
-                letterSpacing: 0.8,
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-            Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                color: Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 10,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Column(
-                children: [
-                  _buildDetailRow('Recipient', transaction.recipient),
-                  _buildDivider(),
-                  _buildDetailRow('Category', transaction.category),
-                  _buildDivider(),
-                  _buildDetailRow('Reference', transaction.reference),
-                  _buildDivider(),
-                  _buildDetailRow('Transaction ID', transaction.id),
-                  _buildDivider(),
-                  _buildDetailRow('Balance', 'KSh ${NumberFormat('#,###.00').format(_getBalance(transaction))}'),
-                ],
-              ),
-            ),
-            
-            const SizedBox(height: 32),
-            
-            // M-Pesa Message
-            const Text(
-              'M-PESA MESSAGE',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF757575),
-                letterSpacing: 0.8,
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                color: const Color(0xFFF9F9F9),
-                border: Border.all(color: const Color(0xFFEEEEEE)),
-              ),
-              child: Text(
-                _getMpesaMessage(transaction),
-                style: const TextStyle(
-                  height: 1.5,
-                  color: Color(0xFF333333),
-                  fontSize: 14,
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 32),
-            
-            // Action Button
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () {
-                  // Report issue or get help functionality
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('You will be redirected'),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                },
-                style: ElevatedButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  backgroundColor: Theme.of(context).primaryColor,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  elevation: 0,
-                ),
-                child: const Text(
-                  'Label Transaction',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 16,
-                  ),
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-          ],
+      body: _isLoading ? _buildLoadingIndicator() : _buildAnalysisContent(),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => _loadTransactions(),
+        backgroundColor: Theme.of(context).primaryColor,
+        child: const Icon(Icons.refresh, color: Colors.white),
+      ),
+    );
+  }
+}
+
+// Helper widgets
+class _StatisticItem extends StatelessWidget {
+  final String title;
+  final String value;
+  final IconData icon;
+  final Color color;
+
+  const _StatisticItem({
+    required this.title,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.2),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            icon,
+            color: color,
+            size: 24,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          value,
+          style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          title,
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  const _ActionButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ElevatedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 16),
+      label: Text(label),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.white,
+        foregroundColor: Theme.of(context).primaryColor,
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
         ),
       ),
     );
   }
-  
-  Widget _buildDetailRow(String title, String value) {
+}
+
+class CategorySpendingTable extends StatelessWidget {
+  final List<Transaction> transactions;
+  final String timeFrame;
+
+  const CategorySpendingTable({
+    Key? key,
+    required this.transactions,
+    required this.timeFrame,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    // Get category breakdown
+    final Map<String, double> categoryBreakdown = TransactionService.getCategoryBreakdown(transactions);
+    
+    // Sort categories by amount (descending)
+    final sortedEntries = categoryBreakdown.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    
+    // Calculate total amount
+    final double totalAmount = categoryBreakdown.values.fold(0.0, (sum, amount) => sum + amount);
+    
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: Color(0xFF757575),
-              fontSize: 14,
-            ),
+      padding: const EdgeInsets.all(16.0),
+      child: Card(
+        elevation: 4,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        color: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Spending by Category',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Theme.of(context).primaryColor,
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).primaryColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        timeFrame,
+                        style: TextStyle(
+                          color: Theme.of(context).primaryColor,
+                          fontWeight: FontWeight.w500,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Table header
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(color: Colors.grey.shade300, width: 1),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const SizedBox(width: 16),
+                    Expanded(
+                      flex: 5,
+                      child: Text(
+                        'Category',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey.shade800,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      flex: 3,
+                      child: Text(
+                        'Amount',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey.shade800,
+                        ),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                    Expanded(
+                      flex: 2,
+                      child: Text(
+                        '%',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey.shade800,
+                        ),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                  ],
+                ),
+              ),
+              // Table rows
+              ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: sortedEntries.length,
+                itemBuilder: (context, index) {
+                  final entry = sortedEntries[index];
+                  final String category = entry.key;
+                  final double amount = entry.value;
+                  final double percentage = (amount / totalAmount) * 100;
+                  
+                  return Container(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(color: Colors.grey.shade200, width: 1),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 16),
+                        // Category indicator
+                        Container(
+                          width: 12,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: _getCategoryColor(context, index),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        // Category name
+                        Expanded(
+                          flex: 5,
+                          child: Text(
+                            category,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                        // Amount
+                        Expanded(
+                          flex: 3,
+                          child: Text(
+                            'KSh ${NumberFormat('#,##0.00').format(amount)}',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w500,
+                            ),
+                            textAlign: TextAlign.right,
+                          ),
+                        ),
+                        // Percentage
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            '${percentage.toStringAsFixed(1)}%',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w500,
+                              color: _getCategoryColor(context, index),
+                            ),
+                            textAlign: TextAlign.right,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                      ],
+                    ),
+                  );
+                },
+              ),
+              // Total row
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(16),
+                    bottomRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const SizedBox(width: 16),
+                    Expanded(
+                      flex: 5,
+                      child: Text(
+                        'Total',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).primaryColor,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      flex: 3,
+                      child: Text(
+                        'KSh ${NumberFormat('#,##0.00').format(totalAmount)}',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).primaryColor,
+                        ),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                    Expanded(
+                      flex: 2,
+                      child: Text(
+                        '100%',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).primaryColor,
+                        ),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                  ],
+                ),
+              ),
+            ],
           ),
-          Text(
-            value,
-            style: const TextStyle(
-              fontWeight: FontWeight.w500,
-              fontSize: 14,
-              color: Color(0xFF1A1A1A),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
-  
-  Widget _buildDivider() {
-    return const Divider(
-      height: 1,
-      thickness: 1,
-      indent: 16,
-      endIndent: 16,
-      color: Color(0xFFF0F0F0),
-    );
-  }
-  
-  Color _getTypeColor(String type) {
-    switch (type.toLowerCase()) {
-      case 'send':
-        return const Color(0xFFFF6B01);
-      case 'receive':
-        return const Color(0xFF00AA55);
-      case 'paybill':
-        return const Color(0xFF1E88E5);
-      case 'withdraw':
-        return const Color(0xFF8E24AA);
-      default:
-        return const Color(0xFF757575);
-    }
-  }
-  
-  IconData _getTypeIcon(String type) {
-    switch (type.toLowerCase()) {
-      case 'send':
-        return Icons.arrow_upward_rounded;
-      case 'receive':
-        return Icons.arrow_downward_rounded;
-      case 'paybill':
-        return Icons.receipt_rounded;
-      case 'withdraw':
-        return Icons.account_balance_rounded;
-      default:
-        return Icons.swap_horiz_rounded;
-    }
-  }
-  
-  String _getTransactionTypeText(String type) {
-    switch (type.toLowerCase()) {
-      case 'send':
-        return 'Money Sent';
-      case 'receive':
-        return 'Money Received';
-      case 'paybill':
-        return 'Bill Payment';
-      case 'withdraw':
-        return 'Cash Withdrawal';
-      default:
-        return 'Transaction';
-    }
-  }
-  
-  double _getBalance(Transaction transaction) {
-    // Simulated balance calculation based on transaction type
-    switch (transaction.type.toLowerCase()) {
-      case 'send':
-        return 15432.75 - transaction.amount;
-      case 'receive':
-        return 15432.75 + transaction.amount;
-      case 'paybill':
-        return 15432.75 - transaction.amount;
-      case 'withdraw':
-        return 15432.75 - transaction.amount;
-      default:
-        return 15432.75;
-    }
-  }
-  
-  String _getMpesaMessage(Transaction transaction) {
-    final String formattedAmount = NumberFormat('#,###.00').format(transaction.amount);
-    final String formattedDate = DateFormat('d/M/yy h:mm a').format(transaction.date);
-    final String balance = NumberFormat('#,###.00').format(_getBalance(transaction));
-    final String transactionCost = NumberFormat('#,###.00').format(_getTransactionCost(transaction));
+
+  Color _getCategoryColor(BuildContext context, int index) {
+    final List<Color> colors = [
+      Theme.of(context).primaryColor,
+      Colors.orange,
+      Colors.blue,
+      Colors.purple,
+      Colors.amber,
+      Colors.pink,
+      Colors.teal,
+      Colors.indigo,
+      Colors.blueGrey,
+    ];
     
-    switch (transaction.type.toLowerCase()) {
-      case 'send':
-        return 'MPWKA5RT3D Confirmed. Ksh$formattedAmount sent to ${transaction.recipient} on $formattedDate. New M-PESA balance is Ksh$balance. Transaction cost, Ksh$transactionCost. Amount you can transact within the day is 299,840.00. Pay bills free with M-PESA. SAFARICOM TRANSPARENT FOR YOU.';
-      case 'receive':
-        return 'MPBJ57YH8F Confirmed. You have received Ksh$formattedAmount from ${transaction.recipient} on $formattedDate. New M-PESA balance is Ksh$balance. Safaricom, Simple. Transparent. Honest.';
-      case 'paybill':
-        return 'MPCLK43T9G Confirmed. Ksh$formattedAmount paid to ${transaction.recipient} for account ${transaction.reference} on $formattedDate. New M-PESA balance is Ksh$balance. Transaction cost, Ksh$transactionCost.';
-      case 'withdraw':
-        return 'MPXYQ19F2H Confirmed. Ksh$formattedAmount withdrawn from ${transaction.recipient} Agent on $formattedDate. New M-PESA balance is Ksh$balance. Transaction cost, Ksh$transactionCost. Pay bills free with M-PESA.';
-      default:
-        return 'MPJK3LD0W5 Confirmed. Transaction of Ksh$formattedAmount on $formattedDate. New M-PESA balance is Ksh$balance.';
-    }
-  }
-  
-  double _getTransactionCost(Transaction transaction) {
-    // Simulated transaction cost based on amount
-    if (transaction.amount <= 100) {
-      return 0;
-    } else if (transaction.amount <= 1000) {
-      return 11;
-    } else if (transaction.amount <= 2500) {
-      return 22;
-    } else if (transaction.amount <= 5000) {
-      return 33;
-    } else if (transaction.amount <= 10000) {
-      return 55;
-    } else {
-      return 77;
-    }
+    return colors[index % colors.length];
   }
 }
 
-extension StringExtension on String {
-  String capitalize() {
-    return "${this[0].toUpperCase()}${substring(1)}";
+// monthly_spending_table.dart
+
+class MonthlySpendingTable extends StatelessWidget {
+  final List<Transaction> transactions;
+  final String timeFrame;
+  
+  const MonthlySpendingTable({
+    Key? key,
+    required this.transactions,
+    required this.timeFrame,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    // Generate monthly spending data
+    final monthlyData = _generateMonthlyData();
+    
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Card(
+        elevation: 4,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        color: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Monthly Spending Summary',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Theme.of(context).primaryColor,
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).primaryColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        timeFrame,
+                        style: TextStyle(
+                          color: Theme.of(context).primaryColor,
+                          fontWeight: FontWeight.w500,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Table headers
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(color: Colors.grey.shade300, width: 1),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const SizedBox(width: 16),
+                    Expanded(
+                      flex: 4,
+                      child: Text(
+                        'Month',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey.shade800,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      flex: 3,
+                      child: Text(
+                        'Spent',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey.shade800,
+                        ),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                    Expanded(
+                      flex: 3,
+                      child: Text(
+                        'Received',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey.shade800,
+                        ),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                    Expanded(
+                      flex: 3,
+                      child: Text(
+                        'Net',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey.shade800,
+                        ),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                  ],
+                ),
+              ),
+              // Table rows
+              monthlyData.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20.0),
+                        child: Text(
+                          'No data available for the selected period',
+                          style: TextStyle(color: Colors.grey[600]),
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: monthlyData.length,
+                      itemBuilder: (context, index) {
+                        final monthData = monthlyData[index];
+                        final spent = monthData['spent'] as double;
+                        final received = monthData['received'] as double;
+                        final net = received - spent;
+                        
+                        return Container(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          decoration: BoxDecoration(
+                            border: Border(
+                              bottom: BorderSide(color: Colors.grey.shade200, width: 1),
+                            ),
+                            color: index % 2 == 0 ? Colors.white : Colors.grey.shade50,
+                          ),
+                          child: Row(
+                            children: [
+                              const SizedBox(width: 16),
+                              // Month
+                              Expanded(
+                                flex: 4,
+                                child: Text(
+                                  monthData['month'] as String,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.grey.shade800,
+                                  ),
+                                ),
+                              ),
+                              // Spent
+                              Expanded(
+                                flex: 3,
+                                child: Text(
+                                  'KSh ${NumberFormat('#,##0.00').format(spent)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.red,
+                                  ),
+                                  textAlign: TextAlign.right,
+                                ),
+                              ),
+                              // Received
+                              Expanded(
+                                flex: 3,
+                                child: Text(
+                                  'KSh ${NumberFormat('#,##0.00').format(received)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.green,
+                                  ),
+                                  textAlign: TextAlign.right,
+                                ),
+                              ),
+                              // Net
+                              Expanded(
+                                flex: 3,
+                                child: Text(
+                                  'KSh ${NumberFormat('#,##0.00').format(net)}',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w500,
+                                    color: net >= 0 ? Colors.green : Colors.red,
+                                  ),
+                                  textAlign: TextAlign.right,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+              // Total row
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).primaryColor.withOpacity(0.05),
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(16),
+                    bottomRight: Radius.circular(16),
+                  ),
+                ),
+                child: _buildTotalRow(context, monthlyData),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTotalRow(BuildContext context, List<Map<String, dynamic>> monthlyData) {
+    final totalSpent = monthlyData.fold<double>(
+      0.0, (sum, month) => sum + (month['spent'] as double));
+    final totalReceived = monthlyData.fold<double>(
+      0.0, (sum, month) => sum + (month['received'] as double));
+    final totalNet = totalReceived - totalSpent;
+    
+    return Row(
+      children: [
+        const SizedBox(width: 16),
+        Expanded(
+          flex: 4,
+          child: Text(
+            'Total',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Theme.of(context).primaryColor,
+            ),
+          ),
+        ),
+        Expanded(
+          flex: 3,
+          child: Text(
+            'KSh ${NumberFormat('#,##0.00').format(totalSpent)}',
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Colors.red,
+            ),
+            textAlign: TextAlign.right,
+          ),
+        ),
+        Expanded(
+          flex: 3,
+          child: Text(
+            'KSh ${NumberFormat('#,##0.00').format(totalReceived)}',
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Colors.green,
+            ),
+            textAlign: TextAlign.right,
+          ),
+        ),
+        Expanded(
+          flex: 3,
+          child: Text(
+            'KSh ${NumberFormat('#,##0.00').format(totalNet)}',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: totalNet >= 0 ? Colors.green : Colors.red,
+            ),
+            textAlign: TextAlign.right,
+          ),
+        ),
+        const SizedBox(width: 16),
+      ],
+    );
+  }
+
+  List<Map<String, dynamic>> _generateMonthlyData() {
+    // Get the number of months to display based on the selected time frame
+    int monthsToDisplay;
+    switch (timeFrame) {
+      case 'Last Month':
+        monthsToDisplay = 1;
+        break;
+      case 'Last 3 Months':
+        monthsToDisplay = 3;
+        break;
+      case 'Last 6 Months':
+        monthsToDisplay = 6;
+        break;
+      case 'Last Year':
+      default:
+        monthsToDisplay = 12;
+        break;
+    }
+
+    // Calculate the start date based on the current date and selected time frame
+    final now = DateTime.now();
+    final startDate = DateTime(now.year, now.month - monthsToDisplay + 1, 1);
+
+    // Create a map to store monthly data
+    final Map<String, Map<String, dynamic>> monthlyMap = {};
+
+    // Initialize the map with all months in the range
+    for (int i = 0; i < monthsToDisplay; i++) {
+      final month = DateTime(startDate.year, startDate.month + i, 1);
+      final monthKey = DateFormat('MMMM yyyy').format(month);
+      
+      monthlyMap[monthKey] = {
+        'month': monthKey,
+        'spent': 0.0,
+        'received': 0.0,
+        'date': month, // Keep date for sorting
+      };
+    }
+
+    // Process transactions
+    for (final transaction in transactions) {
+      // Check if the transaction falls within our date range
+      if (transaction.date.isBefore(startDate)) {
+        continue;
+      }
+
+      // Get the month key for this transaction
+      final monthKey = DateFormat('MMMM yyyy').format(
+        DateTime(transaction.date.year, transaction.date.month, 1)
+      );
+
+      // Skip if the month isn't in our display range
+      if (!monthlyMap.containsKey(monthKey)) {
+        continue;
+      }
+
+      // Update the appropriate amount
+      if (transaction.type == 'Incoming') {
+        monthlyMap[monthKey]!['received'] = 
+          (monthlyMap[monthKey]!['received'] as double) + transaction.amount;
+      } else {
+        monthlyMap[monthKey]!['spent'] = 
+          (monthlyMap[monthKey]!['spent'] as double) + transaction.amount;
+      }
+    }
+
+    // Convert map to list and sort by date
+    final result = monthlyMap.values.toList()
+      ..sort((a, b) => (a['date'] as DateTime).compareTo(b['date'] as DateTime));
+
+    return result;
   }
 }

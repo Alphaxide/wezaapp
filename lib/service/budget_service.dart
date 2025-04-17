@@ -27,16 +27,44 @@ class BudgetService {
     return await _budgetStorage.getBudgetsByMonth(now.year, now.month);
   }
   
-  // Create a new budget for a category
-  Future<int> createBudget(String category, double amount) async {
+  // Check if a budget for a specific category exists in the current month
+  Future<Budget?> getCategoryBudgetForCurrentMonth(String category) async {
     final now = DateTime.now();
-    final budget = Budget(
-      category: category,
-      amount: amount,
-      year: now.year,
-      month: now.month,
-    );
-    return await _budgetStorage.insertBudget(budget);
+    final budgets = await _budgetStorage.getBudgetsByMonth(now.year, now.month);
+    final matches = budgets.where((budget) => budget.category.toLowerCase() == category.toLowerCase()).toList();
+    return matches.isNotEmpty ? matches.first : null;
+  }
+  
+  // Create a new budget for a category or update if exists
+  Future<int> createOrUpdateBudget(String category, double amount) async {
+    // Check if budget for this category already exists in current month
+    final existingBudget = await getCategoryBudgetForCurrentMonth(category);
+    
+    if (existingBudget != null) {
+      // If exists, update the amount
+      final updatedBudget = existingBudget.copyWith(
+        amount: amount,
+        updatedAt: DateTime.now(),
+      );
+      await _budgetStorage.updateBudget(updatedBudget);
+      return updatedBudget.id!;
+    } else {
+      // If it doesn't exist, create a new one
+      final now = DateTime.now();
+      final budget = Budget(
+        category: category,
+        amount: amount,
+        year: now.year,
+        month: now.month,
+        createdAt: now,
+      );
+      return await _budgetStorage.insertBudget(budget);
+    }
+  }
+  
+  // Create a new budget for a category (legacy method kept for compatibility)
+  Future<int> createBudget(String category, double amount) async {
+    return await createOrUpdateBudget(category, amount);
   }
   
   // Update an existing budget
@@ -71,7 +99,7 @@ class BudgetService {
     for (var transaction in transactions) {
       if (transaction.transactionDate.isAfter(startOfMonth) && 
           transaction.transactionDate.isBefore(endOfMonth.add(Duration(days: 1))) &&
-          transaction.category == category &&
+          transaction.category.toLowerCase() == category.toLowerCase() &&
           transaction.direction == 'Outgoing') {
         total += transaction.amount;
       }
@@ -129,7 +157,9 @@ class BudgetService {
   // Get budget progress for a category (percentage spent)
   Future<double> getBudgetProgress(String category) async {
     final budgets = await getCurrentMonthBudgets();
-    final categoryBudget = budgets.where((b) => b.category == category).toList();
+    final categoryBudget = budgets.where(
+      (b) => b.category.toLowerCase() == category.toLowerCase()
+    ).toList();
     
     if (categoryBudget.isEmpty) return 0.0;
     
@@ -147,6 +177,11 @@ class BudgetService {
     
     if (totalBudget == 0) return 0.0;
     return (totalSpent / totalBudget).clamp(0.0, 1.0);
+  }
+  
+  // Check if a budget exists for a category in the current month
+  Future<bool> budgetExistsForCategory(String category) async {
+    return await getCategoryBudgetForCurrentMonth(category) != null;
   }
   
   // Close resources
