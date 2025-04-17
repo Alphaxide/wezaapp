@@ -2,612 +2,380 @@ import "package:flutter/material.dart";
 import "package:intl/intl.dart";
 import "package:weza/addbudget_screen.dart";
 import "package:weza/budgetscreenui.dart";
+import "package:weza/file_picker.dart";
 import "package:weza/models/mpesa_message.dart";
 import "package:weza/storage/mpesa_storage.dart";
 import "package:weza/storage/storage_provider.dart";
 import "package:weza/utilitychart.dart";
 
-void main() {
+import 'package:flutter/services.dart';
+import 'package:telephony/telephony.dart';
+import 'package:weza/utils/mpesa_parser.dart';
+import 'dart:async';
+import 'service/budget_service.dart';
+import 'storage/storage_provider.dart';
+
+// Background message handler
+
+import 'dart:isolate';
+import 'dart:ui';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:flutter_background_service_android/flutter_background_service_android.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:telephony/telephony.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+
+
+// Global constants
+const String MPESA_SENDER = "MPESA";
+const String BACKGROUND_SERVICE_NAME = "WezaBackgroundService";
+const String FOREGROUND_NOTIFICATION_CHANNEL_ID = "weza_foreground";
+const String BACKGROUND_NOTIFICATION_CHANNEL_ID = "weza_background";
+const int FOREGROUND_NOTIFICATION_ID = 888;
+
+// Global port for communication between isolates
+final ReceivePort port = ReceivePort();
+
+// Background message handler for SMS
+@pragma('vm:entry-point')
+Future<void> onBackgroundMessage(SmsMessage message) async {
+  // Check if the message is from M-Pesa
+  if (message.address == MPESA_SENDER || message.address?.contains("MPESA") == true) {
+    // Initialize storage
+    final storage = getStorageImplementation();
+    await storage.initialize();
+    
+    try {
+      // Parse the message
+      final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
+      
+      // Store the message
+      await storage.insertMessage(mpesaMessage);
+    } catch (e) {
+      print("Error processing background message: $e");
+    } finally {
+      await storage.close();
+    }
+  }
+}
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize notification settings
+  await initializeNotifications();
+  
+  // Initialize and start background service
+  await initializeService();
+  
+  // Register the background port
+  IsolateNameServer.registerPortWithName(
+    port.sendPort, 
+    'mpesa_background_service',
+  );
+  
   runApp(const MPesaTrackerApp());
 }
 
-class CategoryDetailsScreen extends StatelessWidget {
-  final String category;
-  final Color categoryColor;
-  final IconData categoryIcon;
+Future<void> initializeNotifications() async {
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+  
+  const AndroidInitializationSettings initializationSettingsAndroid =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+  
+  const InitializationSettings initializationSettings = InitializationSettings(
+    android: initializationSettingsAndroid,
+  );
+  
+  await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+}
 
-  const CategoryDetailsScreen({
-    Key? key,
-    required this.category,
-    required this.categoryColor,
-    required this.categoryIcon,
-  }) : super(key: key);
+Future<void> initializeService() async {
+  final service = FlutterBackgroundService();
+  
+  // Configure Android settings
+  const AndroidNotificationChannel channel = AndroidNotificationChannel(
+    FOREGROUND_NOTIFICATION_CHANNEL_ID,
+    'Weza M-Pesa Tracker',
+    description: 'Monitoring M-Pesa messages',
+    importance: Importance.low,
+  );
+  
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+      
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
+  
+  // Configure service
+  await service.configure(
+    androidConfiguration: AndroidConfiguration(
+      onStart: onServiceStart,
+      autoStart: true,
+      isForegroundMode: true,
+      notificationChannelId: FOREGROUND_NOTIFICATION_CHANNEL_ID,
+      initialNotificationTitle: 'Weza M-Pesa Tracker',
+      initialNotificationContent: 'Monitoring M-Pesa messages',
+      foregroundServiceNotificationId: FOREGROUND_NOTIFICATION_ID,
+    ),
+    iosConfiguration: IosConfiguration(
+      autoStart: true,
+      onForeground: onServiceStart,
+      onBackground: onIosBackground,
+    ),
+  );
+  
+  // Start service
+  service.startService();
+}
 
-  @override
-  Widget build(BuildContext context) {
-    // Filter transactions for this category
-    final categoryTransactions = seedTransactions
-        .where((transaction) => transaction.category == category)
-        .toList();
+// iOS background handler
+@pragma('vm:entry-point')
+Future<bool> onIosBackground(ServiceInstance service) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  DartPluginRegistrant.ensureInitialized();
+  return true;
+}
+
+// Main service entry point
+@pragma('vm:entry-point')
+void onServiceStart(ServiceInstance service) async {
+  DartPluginRegistrant.ensureInitialized();
+  
+  // For Android services
+  if (service is AndroidServiceInstance) {
+    service.on('setAsForeground').listen((event) {
+      service.setAsForegroundService();
+    });
     
-    // Calculate total amount for this category
-    final totalAmount = categoryTransactions.fold(
-        0.0, (sum, transaction) => sum + transaction.amount);
+    service.on('setAsBackground').listen((event) {
+      service.setAsBackgroundService();
+    });
+  }
+  
+  service.on('stopService').listen((event) {
+    service.stopSelf();
+  });
+  
+  // Initialize the telephony instance
+  final telephony = Telephony.instance;
+  
+  // Request SMS permissions and initialize SMS listener
+  await setupSmsListener(telephony);
+  
+  // Periodic health check to ensure service is running
+  Timer.periodic(const Duration(minutes: 5), (timer) async {
+    if (service is AndroidServiceInstance) {
+      if (await service.isForegroundService()) {
+        service.setForegroundNotificationInfo(
+          title: "Weza M-Pesa Tracker",
+          content: "Monitoring M-Pesa messages since ${DateTime.now().hour}:${DateTime.now().minute}",
+        );
+      }
+    }
+    
+    // Send heartbeat to let UI know service is running
+    service.invoke('update', {
+      'isRunning': true,
+      'lastCheck': DateTime.now().toString(),
+    });
+  });
+}
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA), // Match dashboard background
-      appBar: AppBar(
-        title: Text(
-          '$category',
-          style: const TextStyle(
-            fontWeight: FontWeight.w500,
-            fontSize: 22,
-            fontFamily: 'Poppins',
-            color: Colors.white,
-          ),
-          textAlign: TextAlign.center,
-        ),
-        centerTitle: true,
-        elevation: 0,
-        backgroundColor: Theme.of(context).primaryColor,
-      ),
-      body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Gradient header section with shadow for depth (similar to dashboard)
-            Container(
-              padding: const EdgeInsets.only(left: 24.0, right: 24.0, bottom: 30.0, top: 8.0),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Theme.of(context).primaryColor,
-                    Theme.of(context).primaryColor.withOpacity(0.85),
-                  ],
-                ),
-                borderRadius: const BorderRadius.only(
-                  bottomLeft: Radius.circular(32),
-                  bottomRight: Radius.circular(32),
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 10,
-                    offset: const Offset(0, 5),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Category icon and title
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Icon(
-                          categoryIcon,
-                          color: Colors.white,
-                          size: 28,
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            category,
-                            style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                          ),
-                          Text(
-                            '${categoryTransactions.length} transactions',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.7),
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  const Text(
-                    'Total Spent',
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'KSh ${NumberFormat('#,###.00').format(totalAmount)}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 32,
-                      color: Colors.white,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Time period filter - styled like dashboard elements
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              child: Card(
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                color: Colors.white,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.04),
-                        blurRadius: 12,
-                        spreadRadius: 2,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    children: [
-                      const Text(
-                        'Time Period: ',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFF2D3142),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            value: 'All Time',
-                            isDense: true,
-                            icon: const Icon(Icons.keyboard_arrow_down),
-                            onChanged: (String? newValue) {},
-                            items: <String>['All Time', 'This Month', 'Last Month', 'This Year']
-                                .map<DropdownMenuItem<String>>((String value) {
-                              return DropdownMenuItem<String>(
-                                value: value,
-                                child: Text(
-                                  value,
-                                  style: TextStyle(
-                                    color: Theme.of(context).primaryColor,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Transactions Title
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              child: Text(
-                'Transactions',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF2D3142),
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 12),
-
-            // Transactions list
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: Card(
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  color: Colors.white,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.04),
-                          blurRadius: 12,
-                          spreadRadius: 2,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: ListView.separated(
-                      padding: EdgeInsets.zero,
-                      itemCount: categoryTransactions.length,
-                      separatorBuilder: (context, index) => const Divider(
-                        height: 1,
-                        indent: 76,
-                        endIndent: 20,
-                        thickness: 0.5,
-                      ),
-                      itemBuilder: (context, index) {
-                        final transaction = categoryTransactions[index];
-                        return ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                          leading: Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: _getTransactionColor(transaction.type).withOpacity(0.15),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Icon(
-                              _getTransactionIcon(transaction.type),
-                              color: _getTransactionColor(transaction.type),
-                              size: 24,
-                            ),
-                          ),
-                          title: Text(
-                            transaction.recipient,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 16,
-                            ),
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const SizedBox(height: 6),
-                              Row(
-                                children: [
-                                  Text(
-                                    'Ref: ${transaction.reference}',
-                                    style: TextStyle(
-                                      color: Colors.grey[600],
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  const Icon(
-                                    Icons.circle,
-                                    size: 4,
-                                    color: Colors.grey,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    DateFormat('dd MMM, HH:mm').format(transaction.date),
-                                    style: TextStyle(
-                                      color: Colors.grey[600],
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                          trailing: Text(
-                            'KSh ${NumberFormat('#,###.00').format(transaction.amount)}',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 16,
-                              color: transaction.type == 'receive' ? Colors.green[700] : Colors.red[700],
-                            ),
-                          ),
-                          onTap: () {
-                            // Navigate to transaction details
-                        
-                          },
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+Future<void> setupSmsListener(Telephony telephony) async {
+  // Request SMS permissions
+  final permissionStatus = await _getSmsPermission();
+  
+  if (permissionStatus.isGranted) {
+    // Listen for incoming SMS when the app is in the foreground
+    telephony.listenIncomingSms(
+      onNewMessage: (SmsMessage message) async {
+        await processIncomingSms(message);
+      },
+      onBackgroundMessage: onBackgroundMessage,
     );
   }
+}
+
+Future<PermissionStatus> _getSmsPermission() async {
+  // Check Android version for proper permission handling
+  final deviceInfo = DeviceInfoPlugin();
+  final androidInfo = await deviceInfo.androidInfo;
   
-  Color _getTransactionColor(String type) {
-    switch (type) {
-      case 'receive':
-        return Colors.green[700]!;
-      case 'send':
-        return Colors.red[700]!;
-      case 'paybill':
-        return const Color(0xFFF5A623); // Warmer orange
-      case 'withdraw':
-        return const Color(0xFF9C5DE0); // Refined purple
-      default:
-        return const Color(0xFF4E6AF3); // More appealing blue
+  if (androidInfo.version.sdkInt >= 31) { // Android 12+
+    // For Android 12+, we need to request READ_SMS and RECEIVE_SMS separately
+    var smsStatus = await Permission.sms.status;
+    if (!smsStatus.isGranted) {
+      smsStatus = await Permission.sms.request();
     }
-  }
-  
-  IconData _getTransactionIcon(String type) {
-    switch (type) {
-      case 'receive':
-        return Icons.arrow_downward_rounded;
-      case 'send':
-        return Icons.arrow_upward_rounded;
-      case 'paybill':
-        return Icons.receipt_long_rounded;
-      case 'withdraw':
-        return Icons.account_balance_wallet_rounded;
-      default:
-        return Icons.swap_horiz_rounded;
+    
+    var phoneStatus = await Permission.phone.status;
+    if (!phoneStatus.isGranted) {
+      phoneStatus = await Permission.phone.request();
     }
+    
+    if (smsStatus.isGranted && phoneStatus.isGranted) {
+      return PermissionStatus.granted;
+    } else {
+      return PermissionStatus.denied;
+    }
+  } else {
+    // For older Android versions
+    return await Permission.sms.request();
   }
 }
 
-// Transaction Labeling System
-class TransactionLabeler {
-  // Store transaction labeling rules
-  static final Map<String, String> _recipientCategoryMap = {
-    // Common recipients to categories
-    'KPLC': 'Utilities',
-    'SAFARICOM': 'Bills',
-    'DSTV': 'Entertainment',
-    'NAIROBI WATER': 'Utilities',
-    'ZUKU': 'Bills',
-    'UBER': 'Transport',
-    'BOLT': 'Transport',
-    'JUMIA': 'Shopping',
-    'CARREFOUR': 'Shopping',
-    'NAIVAS': 'Shopping',
-    'KCB': 'Banking',
-    'EQUITY': 'Banking',
-    'ABSA': 'Banking',
-    'MPESA AGENT': 'Cash',
-    'ATM': 'Cash',
-    // Add more common Kenya-specific recipients
-  };
-  
-  // Store transaction keyword rules
-  static final Map<String, String> _keywordCategoryMap = {
-    'electricity': 'Utilities',
-    'water': 'Utilities',
-    'bill': 'Bills',
-    'subscription': 'Entertainment',
-    'taxi': 'Transport',
-    'matatu': 'Transport',
-    'fare': 'Transport',
-    'food': 'Food & Dining',
-    'restaurant': 'Food & Dining',
-    'groceries': 'Shopping',
-    'supermarket': 'Shopping',
-    'salary': 'Income',
-    'payment': 'Income',
-    'withdraw': 'Cash',
-    'school': 'Education',
-    'fees': 'Education',
-    'medical': 'Healthcare',
-    'hospital': 'Healthcare',
-    'pharmacy': 'Healthcare',
-    // Add more keywords for Kenya-specific transactions
-  };
-  
-  // Auto-assign category based on recipient and SMS content
-  static String suggestCategory(String recipient, String smsContent, String transactionType) {
-    // First check if recipient is directly in our map
-    String recipientUpper = recipient.toUpperCase();
-    
-    // Direct recipient match
-    for (var entry in _recipientCategoryMap.entries) {
-      if (recipientUpper.contains(entry.key)) {
-        return entry.value;
-      }
-    }
-    
-    // Check for keywords in SMS content
-    String smsLower = smsContent.toLowerCase();
-    for (var entry in _keywordCategoryMap.entries) {
-      if (smsLower.contains(entry.key)) {
-        return entry.value;
-      }
-    }
-    
-    // Default categories based on transaction type
-    switch (transactionType) {
-      case 'receive':
-        return 'Income';
-      case 'send':
-        return 'Friends & Family';
-      case 'paybill':
-        return 'Bills';
-      case 'withdraw':
-        return 'Cash';
-      default:
-        return 'Other';
-    }
-  }
-  
-  // Method to learn from user categorizations
-  static void learnFromUserCategorization(String recipient, String category) {
-    // Add this categorization to our map for future suggestions
-    _recipientCategoryMap[recipient.toUpperCase()] = category;
-  }
-  
-  // Parse M-Pesa SMS to extract transaction details
-  static Map<String, dynamic>? parseMpesaSms(String smsContent) {
+Future<void> processIncomingSms(SmsMessage message) async {
+  // Check if the message is from M-Pesa
+  if (message.address == MPESA_SENDER || message.address?.contains("MPESA") == true) {
     try {
-      // Common patterns in M-Pesa SMS messages
-      smsContent = smsContent.toUpperCase();
+      // Initialize storage
+      final storage = getStorageImplementation();
+      await storage.initialize();
       
-      // Determine transaction type
-      String transactionType;
-      if (smsContent.contains('YOU HAVE RECEIVED')) {
-        transactionType = 'receive';
-      } else if (smsContent.contains('YOU HAVE SENT')) {
-        transactionType = 'send';
-      } else if (smsContent.contains('PAID TO')) {
-        transactionType = 'paybill';
-      } else if (smsContent.contains('WITHDRAW') || smsContent.contains('DEBITED')) {
-        transactionType = 'withdraw';
-      } else {
-        transactionType = 'other';
+      // Parse the message
+      final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
+      
+      // Store the message
+      final messageId = await storage.insertMessage(mpesaMessage);
+      
+      // Show notification for new M-Pesa message
+      _showMpesaNotification(mpesaMessage);
+      
+      // Close storage
+      await storage.close();
+      
+      // Send data to main UI if needed
+      final SendPort? send = IsolateNameServer.lookupPortByName('mpesa_background_service');
+      if (send != null) {
+        send.send({
+          'action': 'new_message',
+          'id': messageId,
+          'time': DateTime.now().toString(),
+        });
       }
-      
-      // Extract amount 
-      final amountRegex = RegExp(r'KSH([\d,]+)');
-      final amountMatch = amountRegex.firstMatch(smsContent);
-      String? amountStr = amountMatch?.group(1)?.replaceAll(',', '');
-      double amount = amountStr != null ? double.parse(amountStr) : 0;
-      
-      // Extract recipient/sender based on transaction type
-      String recipient = '';
-      if (transactionType == 'receive') {
-        final fromRegex = RegExp(r'FROM\s+([A-Z0-9\s]+)\s+ON');
-        final fromMatch = fromRegex.firstMatch(smsContent);
-        recipient = fromMatch?.group(1)?.trim() ?? 'Unknown';
-      } else if (transactionType == 'send') {
-        final toRegex = RegExp(r'TO\s+([A-Z0-9\s]+)\s+ON');
-        final toMatch = toRegex.firstMatch(smsContent);
-        recipient = toMatch?.group(1)?.trim() ?? 'Unknown';
-      } else if (transactionType == 'paybill') {
-        final toRegex = RegExp(r'TO\s+([A-Z0-9\s]+)\.');
-        final toMatch = toRegex.firstMatch(smsContent);
-        recipient = toMatch?.group(1)?.trim() ?? 'Unknown';
-      }
-      
-      // Extract reference if any (usually for paybill)
-      String reference = '';
-      final refRegex = RegExp(r'REF.\s+([A-Z0-9]+)');
-      final refMatch = refRegex.firstMatch(smsContent);
-      if (refMatch != null) {
-        reference = refMatch.group(1) ?? '';  
-      }
-      
-      // Try to extract date and time
-      DateTime date = DateTime.now();
-      
-      // Determine category based on extracted info
-      String category = suggestCategory(recipient, smsContent, transactionType);
-      
-      return {
-        'type': transactionType,
-        'amount': amount,
-        'recipient': recipient,
-        'reference': reference,
-        'date': date,
-        'category': category,
-        'description': _generateDescription(transactionType, recipient),
-      };
     } catch (e) {
-      print('Error parsing SMS: $e');
-      return null;
-    }
-  }
-  
-  static String _generateDescription(String transactionType, String recipient) {
-    switch (transactionType) {
-      case 'receive':
-        return 'Received from $recipient';
-      case 'send':
-        return 'Sent to $recipient';
-      case 'paybill':
-        return 'Paid to $recipient';
-      case 'withdraw':
-        return 'Withdrawal';
-      default:
-        return 'Transaction with $recipient';
+      print("Error processing incoming SMS: $e");
     }
   }
 }
 
-// SMS Labeling Screen
-class TransactionLabelingScreen extends StatefulWidget {
-  final String smsContent;
-  final Map<String, dynamic>? parsedData;
+void _showMpesaNotification(MpesaMessage message) async {
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+      
+  // Simplified message for notification
+  String notificationTitle;
+  String notificationBody;
+  
+  if (message.direction == 'Incoming') {
+    notificationTitle = 'Received ${message.amount} KES';
+    notificationBody = 'From: ${message.senderOrReceiverName}';
+  } else {
+    notificationTitle = 'Sent ${message.amount} KES';
+    notificationBody = 'To: ${message.senderOrReceiverName} • Balance: ${message.balance} KES';
+  }
+  
+  const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+    BACKGROUND_NOTIFICATION_CHANNEL_ID,
+    'M-Pesa Notifications',
+    channelDescription: 'Notifications for M-Pesa transactions',
+    importance: Importance.high,
+    priority: Priority.high,
+    showWhen: true,
+  );
+  
+  const NotificationDetails notificationDetails = NotificationDetails(
+    android: androidDetails,
+  );
+  
+  await flutterLocalNotificationsPlugin.show(
+    message.id ?? DateTime.now().millisecondsSinceEpoch.remainder(100000),
+    notificationTitle,
+    notificationBody,
+    notificationDetails,
+  );
+}
 
-  const TransactionLabelingScreen({
-    Key? key, 
-    required this.smsContent,
-    this.parsedData,
-  }) : super(key: key);
+
+
+class HomePage extends StatefulWidget {
+  const HomePage({Key? key}) : super(key: key);
 
   @override
-  State<TransactionLabelingScreen> createState() => _TransactionLabelingScreenState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class _TransactionLabelingScreenState extends State<TransactionLabelingScreen> {
-  late TextEditingController _amountController;
-  late TextEditingController _recipientController;
-  late TextEditingController _referenceController;
-  late TextEditingController _descriptionController;
-  String _selectedCategory = 'Other';
-  String _transactionType = 'other';
-  DateTime _transactionDate = DateTime.now();
-  bool _isAutoLabeled = false;
+class _HomePageState extends State<HomePage> {
+  final StreamController<String> _serviceStatusController = StreamController<String>.broadcast();
+  bool _serviceRunning = false;
+  String _lastUpdate = 'Not started';
   
-  final List<String> _categories = [
-    'Income',
-    'Food & Dining',
-    'Transport',
-    'Utilities',
-    'Entertainment',
-    'Shopping',
-    'Bills',
-    'Education',
-    'Healthcare',
-    'Family',
-    'Friends',
-    'Cash',
-    'Other',
-  ];
-
   @override
   void initState() {
     super.initState();
-    
-    // Initialize with parsed data if available or default values
-    if (widget.parsedData != null) {
-      _amountController = TextEditingController(text: widget.parsedData!['amount'].toString());
-      _recipientController = TextEditingController(text: widget.parsedData!['recipient']);
-      _referenceController = TextEditingController(text: widget.parsedData!['reference']);
-      _descriptionController = TextEditingController(text: widget.parsedData!['description']);
-      _selectedCategory = widget.parsedData!['category'];
-      _transactionType = widget.parsedData!['type'];
-      _transactionDate = widget.parsedData!['date'];
-      _isAutoLabeled = true;
-    } else {
-      _amountController = TextEditingController();
-      _recipientController = TextEditingController();
-      _referenceController = TextEditingController();
-      _descriptionController = TextEditingController();
-    }
+    _checkServiceStatus();
+    _listenToServiceUpdates();
+    _requestPermissions();
   }
-
+  
+  Future<void> _requestPermissions() async {
+    await _getSmsPermission(); // Reusing the permission function
+  }
+  
+  Future<void> _checkServiceStatus() async {
+    final service = FlutterBackgroundService();
+    final isRunning = await service.isRunning();
+    setState(() {
+      _serviceRunning = isRunning;
+      _lastUpdate = isRunning ? 'Service is running' : 'Service is stopped';
+    });
+    _serviceStatusController.add(_lastUpdate);
+  }
+  
+  void _listenToServiceUpdates() {
+    FlutterBackgroundService().on('update').listen((event) {
+      if (event != null) {
+        setState(() {
+          _serviceRunning = event['isRunning'] ?? false;
+          _lastUpdate = event['lastCheck'] ?? 'Unknown';
+        });
+        _serviceStatusController.add('Updated: $_lastUpdate');
+      }
+    });
+    
+    // Listen for messages from background isolate
+    port.listen((message) {
+      if (message != null && message is Map) {
+        if (message['action'] == 'new_message') {
+          setState(() {
+            _lastUpdate = 'New message at ${message['time']}';
+          });
+          _serviceStatusController.add('New M-Pesa transaction detected');
+        }
+      }
+    });
+  }
+  
+  Future<void> _toggleService() async {
+    final service = FlutterBackgroundService();
+    if (_serviceRunning) {
+       service.invoke('stopService');
+    } else {
+      await service.startService();
+    }
+    await _checkServiceStatus();
+  }
+  
   @override
   void dispose() {
-    _amountController.dispose();
-    _recipientController.dispose();
-    _referenceController.dispose();
-    _descriptionController.dispose();
+    _serviceStatusController.close();
     super.dispose();
   }
 
@@ -615,376 +383,54 @@ class _TransactionLabelingScreenState extends State<TransactionLabelingScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Label Transaction'),
+        title: const Text('Weza M-Pesa Tracker'),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
+      body: Center(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Original SMS
-            Card(
-              elevation: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.message, color: Colors.grey),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Original SMS',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                        const Spacer(),
-                        if (_isAutoLabeled)
-                          Chip(
-                            label: const Text('Auto-labeled'),
-                            backgroundColor: Colors.green.withOpacity(0.2),
-                            avatar: const Icon(Icons.auto_awesome, color: Colors.green, size: 16),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(widget.smsContent),
-                  ],
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Transaction type
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
             const Text(
-              'Transaction Type',
+              'M-Pesa SMS Monitoring Service',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 20),
+            StreamBuilder<String>(
+              stream: _serviceStatusController.stream,
+              initialData: 'Checking service status...',
+              builder: (context, snapshot) {
+                return Text(
+                  snapshot.data ?? 'Unknown status',
+                  style: const TextStyle(fontSize: 16),
+                );
+              },
+            ),
+            const SizedBox(height: 20),
+            Text(
+              'Service status: ${_serviceRunning ? 'Running' : 'Stopped'}',
               style: TextStyle(
-                fontWeight: FontWeight.bold,
                 fontSize: 16,
+                color: _serviceRunning ? Colors.green : Colors.red,
               ),
             ),
-            const SizedBox(height: 8),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  _TransactionTypeChip(
-                    label: 'Money In',
-                    type: 'receive',
-                    selected: _transactionType == 'receive',
-                    onSelected: (selected) {
-                      if (selected) {
-                        setState(() {
-                          _transactionType = 'receive';
-                        });
-                      }
-                    },
-                  ),
-                  _TransactionTypeChip(
-                    label: 'Money Out',
-                    type: 'send',
-                    selected: _transactionType == 'send',
-                    onSelected: (selected) {
-                      if (selected) {
-                        setState(() {
-                          _transactionType = 'send';
-                        });
-                      }
-                    },
-                  ),
-                  _TransactionTypeChip(
-                    label: 'Bill Payment',
-                    type: 'paybill',
-                    selected: _transactionType == 'paybill',
-                    onSelected: (selected) {
-                      if (selected) {
-                        setState(() {
-                          _transactionType = 'paybill';
-                        });
-                      }
-                    },
-                  ),
-                  _TransactionTypeChip(
-                    label: 'Withdrawal',
-                    type: 'withdraw',
-                    selected: _transactionType == 'withdraw',
-                    onSelected: (selected) {
-                      if (selected) {
-                        setState(() {
-                          _transactionType = 'withdraw';
-                        });
-                      }
-                    },
-                  ),
-                ],
-              ),
+            const SizedBox(height: 10),
+            Text(
+              'Last update: $_lastUpdate',
+              style: const TextStyle(fontSize: 14),
             ),
-            
-            const SizedBox(height: 24),
-            
-            // Transaction details
-            Card(
-              elevation: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Transaction Details',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: _amountController,
-                      decoration: const InputDecoration(
-                        labelText: 'Amount (KSh)',
-                        border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.monetization_on),
-                      ),
-                      keyboardType: TextInputType.number,
-                    ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: _recipientController,
-                      decoration: const InputDecoration(
-                        labelText: 'Recipient/Sender',
-                        border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.person),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: _referenceController,
-                      decoration: const InputDecoration(
-                        labelText: 'Reference Number',
-                        border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.confirmation_number),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: _descriptionController,
-                      decoration: const InputDecoration(
-                        labelText: 'Description',
-                        border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.description),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+            const SizedBox(height: 30),
+            ElevatedButton(
+              onPressed: _toggleService,
+              child: Text(_serviceRunning ? 'Stop Service' : 'Start Service'),
             ),
-            
-            const SizedBox(height: 24),
-            
-            // Category selection
-            Card(
-              elevation: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Select Category',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Wrap(
-                      spacing: 8.0,
-                      runSpacing: 8.0,
-                      children: _categories.map((category) {
-                        return ChoiceChip(
-                          label: Text(category),
-                          selected: _selectedCategory == category,
-                          onSelected: (selected) {
-                            if (selected) {
-                              setState(() {
-                                _selectedCategory = category;
-                              });
-                            }
-                          },
-                        );
-                      }).toList(),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-            // Date and time selection
-            Card(
-              elevation: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Date & Time',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    ListTile(
-                      leading: const Icon(Icons.calendar_today),
-                      title: Text(
-                        DateFormat('dd MMM yyyy, HH:mm').format(_transactionDate),
-                      ),
-                      trailing: const Icon(Icons.edit),
-                      onTap: () async {
-                        // Show date-time picker
-                        final DateTime? pickedDate = await showDatePicker(
-                          context: context,
-                          initialDate: _transactionDate,
-                          firstDate: DateTime(2020),
-                          lastDate: DateTime.now(),
-                        );
-                        
-                        if (pickedDate != null) {
-                          // Show time picker
-                          final TimeOfDay? pickedTime = await showTimePicker(
-                            context: context,
-                            initialTime: TimeOfDay.fromDateTime(_transactionDate),
-                          );
-                          
-                          if (pickedTime != null) {
-                            setState(() {
-                              _transactionDate = DateTime(
-                                pickedDate.year,
-                                pickedDate.month,
-                                pickedDate.day,
-                                pickedTime.hour,
-                                pickedTime.minute,
-                              );
-                            });
-                          }
-                        }
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Save button
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () {
-                  // Create transaction with current data
-                  final newTransaction = Transaction(
-                    id: 'TX${DateTime.now().millisecondsSinceEpoch}',
-                    type: _transactionType,
-                    recipient: _recipientController.text,
-                    amount: double.tryParse(_amountController.text) ?? 0,
-                    date: _transactionDate,
-                    description: _descriptionController.text,
-                    category: _selectedCategory,
-                    reference: _referenceController.text,
-                  );
-                  
-                  // Learn from this categorization for future auto-labeling
-                  TransactionLabeler.learnFromUserCategorization(
-                    _recipientController.text, 
-                    _selectedCategory
-                  );
-                  
-                  // Return the new transaction to the caller
-                  Navigator.pop(context, newTransaction);
-                },
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
-                child: const Text('Save Transaction'),
-              ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _requestPermissions,
+              child: const Text('Request SMS Permissions'),
             ),
           ],
         ),
       ),
     );
-  }
-}
-
-class _TransactionTypeChip extends StatelessWidget {
-  final String label;
-  final String type;
-  final bool selected;
-  final Function(bool)? onSelected;
-
-  const _TransactionTypeChip({
-    required this.label,
-    required this.type,
-    this.selected = false,
-    this.onSelected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final color = _getColorForType(type);
-    
-    return Padding(
-      padding: const EdgeInsets.only(right: 8.0),
-      child: FilterChip(
-        label: Text(label),
-        selected: selected,
-        onSelected: onSelected,
-        selectedColor: color.withOpacity(0.2),
-        checkmarkColor: color,
-        avatar: Icon(
-          _getIconForType(type),
-          color: selected ? color : Colors.grey,
-          size: 18,
-        ),
-      ),
-    );
-  }
-  
-  Color _getColorForType(String type) {
-    switch (type) {
-      case 'receive':
-        return Colors.green;
-      case 'send':
-        return Colors.red;
-      case 'paybill':
-        return Colors.orange;
-      case 'withdraw':
-        return Colors.purple;
-      default:
-        return Colors.blue;
-    }
-  }
-  
-  IconData _getIconForType(String type) {
-    switch (type) {
-      case 'receive':
-        return Icons.arrow_downward;
-      case 'send':
-        return Icons.arrow_upward;
-      case 'paybill':
-        return Icons.receipt;
-      case 'withdraw':
-        return Icons.money;
-      default:
-        return Icons.swap_horiz;
-    }
   }
 }
 
@@ -1031,154 +477,6 @@ class Transaction {
 }
 
 
-String autoLabelCategory(String recipient, String description, String type) {
-  recipient = recipient.toLowerCase();
-  description = description.toLowerCase();
-  
-  // Utility companies
-  if (recipient.contains('kplc') || 
-      recipient.contains('kenya power') || 
-      description.contains('electricity')) {
-    return 'Utilities';
-  }
-  
-  if (recipient.contains('safaricom') || 
-      recipient.contains('airtel') || 
-      recipient.contains('telkom') ||
-      description.contains('airtime') ||
-      description.contains('data bundle')) {
-    return 'Telecommunications';
-  }
-  
-  if (recipient.contains('water') || 
-      description.contains('water bill')) {
-    return 'Utilities';
-  }
-  
-  // Transportation
-  if (recipient.contains('uber') || 
-      recipient.contains('bolt') || 
-      recipient.contains('little') ||
-      description.contains('taxi') ||
-      description.contains('fare') ||
-      description.contains('transport')) {
-    return 'Transport';
-  }
-  
-  // Food and shopping
-  if (recipient.contains('supermarket') || 
-      recipient.contains('market') || 
-      recipient.contains('shop') ||
-      recipient.contains('store')) {
-    return 'Shopping';
-  }
-  
-  if (recipient.contains('restaurant') || 
-      recipient.contains('cafe') || 
-      recipient.contains('food') ||
-      description.contains('lunch') ||
-      description.contains('dinner')) {
-    return 'Food & Dining';
-  }
-  
-  // Default categories based on transaction type
-  if (type == 'receive') {
-    return 'Income';
-  }
-  
-  if (type == 'withdraw') {
-    return 'Cash';
-  }
-  
-  // Default
-  return 'Other';
-}
-
-
-// Seed data
-final List<Transaction> seedTransactions = [
-  Transaction(
-    id: 'QJL7HPIHX2',
-    type: 'send',
-    recipient: 'John Doe',
-    amount: 1500,
-    date: DateTime.now().subtract(const Duration(hours: 2)),
-    description: 'Sent to John Doe',
-    category: 'Friends',
-    reference: 'Lunch payment',
-  ),
-  Transaction(
-    id: 'QJL7HPIHX3',
-    type: 'receive',
-    recipient: 'Mary Smith',
-    amount: 2000,
-    date: DateTime.now().subtract(const Duration(days: 1)),
-    description: 'Received from Mary Smith',
-    category: 'Income',
-    reference: 'Project payment',
-  ),
-  Transaction(
-    id: 'QJL7HPIHX4',
-    type: 'paybill',
-    recipient: 'KPLC',
-    amount: 1200,
-    date: DateTime.now().subtract(const Duration(days: 2)),
-    description: 'Paid to KPLC',
-    category: 'Utilities',
-    reference: 'Electricity bill',
-  ),
-
-  Transaction(
-    id: 'QJL7HPIHX6',
-    type: 'paybill',
-    recipient: 'KPLC',
-    amount: 1200,
-    date: DateTime.now().subtract(const Duration(days: 2)),
-    description: 'Paid to KPLC',
-    category: 'Utilities',
-    reference: 'Electricity bill',
-  ),
-  Transaction(
-    id: 'QJL7HPIHX5',
-    type: 'withdraw',
-    recipient: 'ATM',
-    amount: 3000,
-    date: DateTime.now().subtract(const Duration(days: 3)),
-    description: 'Withdrawal',
-    category: 'Cash',
-    reference: 'Weekend expenses',
-  ),
-  Transaction(
-    id: 'QJL7HPIHX6',
-    type: 'paybill',
-    recipient: 'Safaricom',
-    amount: 1000,
-    date: DateTime.now().subtract(const Duration(days: 5)),
-    description: 'Paid to Safaricom',
-    category: 'Bills',
-    reference: 'Phone bill',
-  ),
-  Transaction(
-    id: 'QJL7HPIHX7',
-    type: 'send',
-    recipient: 'James Kamau',
-    amount: 500,
-    date: DateTime.now().subtract(const Duration(days: 7)),
-    description: 'Sent to James Kamau',
-    category: 'Family',
-    reference: 'Transport',
-  ),
-  Transaction(
-    id: 'QJL7HPIHX8',
-    type: 'receive',
-    recipient: 'Employer',
-    amount: 35000,
-    date: DateTime.now().subtract(const Duration(days: 15)),
-    description: 'Received from Employer',
-    category: 'Salary',
-    reference: 'April Salary',
-  ),
-];
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
