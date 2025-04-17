@@ -8,10 +8,431 @@ import "package:weza/storage/mpesa_storage.dart";
 import "package:weza/storage/storage_provider.dart";
 import "package:weza/utilitychart.dart";
 
-void main() {
+import 'package:flutter/services.dart';
+import 'package:telephony/telephony.dart';
+import 'package:weza/utils/mpesa_parser.dart';
+import 'dart:async';
+import 'service/budget_service.dart';
+import 'storage/storage_provider.dart';
+
+// Background message handler
+
+import 'dart:isolate';
+import 'dart:ui';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:flutter_background_service_android/flutter_background_service_android.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:telephony/telephony.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+
+
+// Global constants
+const String MPESA_SENDER = "MPESA";
+const String BACKGROUND_SERVICE_NAME = "WezaBackgroundService";
+const String FOREGROUND_NOTIFICATION_CHANNEL_ID = "weza_foreground";
+const String BACKGROUND_NOTIFICATION_CHANNEL_ID = "weza_background";
+const int FOREGROUND_NOTIFICATION_ID = 888;
+
+// Global port for communication between isolates
+final ReceivePort port = ReceivePort();
+
+// Background message handler for SMS
+@pragma('vm:entry-point')
+Future<void> onBackgroundMessage(SmsMessage message) async {
+  // Check if the message is from M-Pesa
+  if (message.address == MPESA_SENDER || message.address?.contains("MPESA") == true) {
+    // Initialize storage
+    final storage = getStorageImplementation();
+    await storage.initialize();
+    
+    try {
+      // Parse the message
+      final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
+      
+      // Store the message
+      await storage.insertMessage(mpesaMessage);
+    } catch (e) {
+      print("Error processing background message: $e");
+    } finally {
+      await storage.close();
+    }
+  }
+}
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize notification settings
+  await initializeNotifications();
+  
+  // Initialize and start background service
+  await initializeService();
+  
+  // Register the background port
+  IsolateNameServer.registerPortWithName(
+    port.sendPort, 
+    'mpesa_background_service',
+  );
+  
   runApp(const MPesaTrackerApp());
 }
 
+Future<void> initializeNotifications() async {
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+  
+  const AndroidInitializationSettings initializationSettingsAndroid =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+  
+  const InitializationSettings initializationSettings = InitializationSettings(
+    android: initializationSettingsAndroid,
+  );
+  
+  await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+}
+
+Future<void> initializeService() async {
+  final service = FlutterBackgroundService();
+  
+  // Configure Android settings
+  const AndroidNotificationChannel channel = AndroidNotificationChannel(
+    FOREGROUND_NOTIFICATION_CHANNEL_ID,
+    'Weza M-Pesa Tracker',
+    description: 'Monitoring M-Pesa messages',
+    importance: Importance.low,
+  );
+  
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+      
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
+  
+  // Configure service
+  await service.configure(
+    androidConfiguration: AndroidConfiguration(
+      onStart: onServiceStart,
+      autoStart: true,
+      isForegroundMode: true,
+      notificationChannelId: FOREGROUND_NOTIFICATION_CHANNEL_ID,
+      initialNotificationTitle: 'Weza M-Pesa Tracker',
+      initialNotificationContent: 'Monitoring M-Pesa messages',
+      foregroundServiceNotificationId: FOREGROUND_NOTIFICATION_ID,
+    ),
+    iosConfiguration: IosConfiguration(
+      autoStart: true,
+      onForeground: onServiceStart,
+      onBackground: onIosBackground,
+    ),
+  );
+  
+  // Start service
+  service.startService();
+}
+
+// iOS background handler
+@pragma('vm:entry-point')
+Future<bool> onIosBackground(ServiceInstance service) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  DartPluginRegistrant.ensureInitialized();
+  return true;
+}
+
+// Main service entry point
+@pragma('vm:entry-point')
+void onServiceStart(ServiceInstance service) async {
+  DartPluginRegistrant.ensureInitialized();
+  
+  // For Android services
+  if (service is AndroidServiceInstance) {
+    service.on('setAsForeground').listen((event) {
+      service.setAsForegroundService();
+    });
+    
+    service.on('setAsBackground').listen((event) {
+      service.setAsBackgroundService();
+    });
+  }
+  
+  service.on('stopService').listen((event) {
+    service.stopSelf();
+  });
+  
+  // Initialize the telephony instance
+  final telephony = Telephony.instance;
+  
+  // Request SMS permissions and initialize SMS listener
+  await setupSmsListener(telephony);
+  
+  // Periodic health check to ensure service is running
+  Timer.periodic(const Duration(minutes: 5), (timer) async {
+    if (service is AndroidServiceInstance) {
+      if (await service.isForegroundService()) {
+        service.setForegroundNotificationInfo(
+          title: "Weza M-Pesa Tracker",
+          content: "Monitoring M-Pesa messages since ${DateTime.now().hour}:${DateTime.now().minute}",
+        );
+      }
+    }
+    
+    // Send heartbeat to let UI know service is running
+    service.invoke('update', {
+      'isRunning': true,
+      'lastCheck': DateTime.now().toString(),
+    });
+  });
+}
+
+Future<void> setupSmsListener(Telephony telephony) async {
+  // Request SMS permissions
+  final permissionStatus = await _getSmsPermission();
+  
+  if (permissionStatus.isGranted) {
+    // Listen for incoming SMS when the app is in the foreground
+    telephony.listenIncomingSms(
+      onNewMessage: (SmsMessage message) async {
+        await processIncomingSms(message);
+      },
+      onBackgroundMessage: onBackgroundMessage,
+    );
+  }
+}
+
+Future<PermissionStatus> _getSmsPermission() async {
+  // Check Android version for proper permission handling
+  final deviceInfo = DeviceInfoPlugin();
+  final androidInfo = await deviceInfo.androidInfo;
+  
+  if (androidInfo.version.sdkInt >= 31) { // Android 12+
+    // For Android 12+, we need to request READ_SMS and RECEIVE_SMS separately
+    var smsStatus = await Permission.sms.status;
+    if (!smsStatus.isGranted) {
+      smsStatus = await Permission.sms.request();
+    }
+    
+    var phoneStatus = await Permission.phone.status;
+    if (!phoneStatus.isGranted) {
+      phoneStatus = await Permission.phone.request();
+    }
+    
+    if (smsStatus.isGranted && phoneStatus.isGranted) {
+      return PermissionStatus.granted;
+    } else {
+      return PermissionStatus.denied;
+    }
+  } else {
+    // For older Android versions
+    return await Permission.sms.request();
+  }
+}
+
+Future<void> processIncomingSms(SmsMessage message) async {
+  // Check if the message is from M-Pesa
+  if (message.address == MPESA_SENDER || message.address?.contains("MPESA") == true) {
+    try {
+      // Initialize storage
+      final storage = getStorageImplementation();
+      await storage.initialize();
+      
+      // Parse the message
+      final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
+      
+      // Store the message
+      final messageId = await storage.insertMessage(mpesaMessage);
+      
+      // Show notification for new M-Pesa message
+      _showMpesaNotification(mpesaMessage);
+      
+      // Close storage
+      await storage.close();
+      
+      // Send data to main UI if needed
+      final SendPort? send = IsolateNameServer.lookupPortByName('mpesa_background_service');
+      if (send != null) {
+        send.send({
+          'action': 'new_message',
+          'id': messageId,
+          'time': DateTime.now().toString(),
+        });
+      }
+    } catch (e) {
+      print("Error processing incoming SMS: $e");
+    }
+  }
+}
+
+void _showMpesaNotification(MpesaMessage message) async {
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+      
+  // Simplified message for notification
+  String notificationTitle;
+  String notificationBody;
+  
+  if (message.direction == 'Incoming') {
+    notificationTitle = 'Received ${message.amount} KES';
+    notificationBody = 'From: ${message.senderOrReceiverName}';
+  } else {
+    notificationTitle = 'Sent ${message.amount} KES';
+    notificationBody = 'To: ${message.senderOrReceiverName} • Balance: ${message.balance} KES';
+  }
+  
+  const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+    BACKGROUND_NOTIFICATION_CHANNEL_ID,
+    'M-Pesa Notifications',
+    channelDescription: 'Notifications for M-Pesa transactions',
+    importance: Importance.high,
+    priority: Priority.high,
+    showWhen: true,
+  );
+  
+  const NotificationDetails notificationDetails = NotificationDetails(
+    android: androidDetails,
+  );
+  
+  await flutterLocalNotificationsPlugin.show(
+    message.id ?? DateTime.now().millisecondsSinceEpoch.remainder(100000),
+    notificationTitle,
+    notificationBody,
+    notificationDetails,
+  );
+}
+
+
+
+class HomePage extends StatefulWidget {
+  const HomePage({Key? key}) : super(key: key);
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  final StreamController<String> _serviceStatusController = StreamController<String>.broadcast();
+  bool _serviceRunning = false;
+  String _lastUpdate = 'Not started';
+  
+  @override
+  void initState() {
+    super.initState();
+    _checkServiceStatus();
+    _listenToServiceUpdates();
+    _requestPermissions();
+  }
+  
+  Future<void> _requestPermissions() async {
+    await _getSmsPermission(); // Reusing the permission function
+  }
+  
+  Future<void> _checkServiceStatus() async {
+    final service = FlutterBackgroundService();
+    final isRunning = await service.isRunning();
+    setState(() {
+      _serviceRunning = isRunning;
+      _lastUpdate = isRunning ? 'Service is running' : 'Service is stopped';
+    });
+    _serviceStatusController.add(_lastUpdate);
+  }
+  
+  void _listenToServiceUpdates() {
+    FlutterBackgroundService().on('update').listen((event) {
+      if (event != null) {
+        setState(() {
+          _serviceRunning = event['isRunning'] ?? false;
+          _lastUpdate = event['lastCheck'] ?? 'Unknown';
+        });
+        _serviceStatusController.add('Updated: $_lastUpdate');
+      }
+    });
+    
+    // Listen for messages from background isolate
+    port.listen((message) {
+      if (message != null && message is Map) {
+        if (message['action'] == 'new_message') {
+          setState(() {
+            _lastUpdate = 'New message at ${message['time']}';
+          });
+          _serviceStatusController.add('New M-Pesa transaction detected');
+        }
+      }
+    });
+  }
+  
+  Future<void> _toggleService() async {
+    final service = FlutterBackgroundService();
+    if (_serviceRunning) {
+       service.invoke('stopService');
+    } else {
+      await service.startService();
+    }
+    await _checkServiceStatus();
+  }
+  
+  @override
+  void dispose() {
+    _serviceStatusController.close();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Weza M-Pesa Tracker'),
+      ),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            const Text(
+              'M-Pesa SMS Monitoring Service',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 20),
+            StreamBuilder<String>(
+              stream: _serviceStatusController.stream,
+              initialData: 'Checking service status...',
+              builder: (context, snapshot) {
+                return Text(
+                  snapshot.data ?? 'Unknown status',
+                  style: const TextStyle(fontSize: 16),
+                );
+              },
+            ),
+            const SizedBox(height: 20),
+            Text(
+              'Service status: ${_serviceRunning ? 'Running' : 'Stopped'}',
+              style: TextStyle(
+                fontSize: 16,
+                color: _serviceRunning ? Colors.green : Colors.red,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Last update: $_lastUpdate',
+              style: const TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 30),
+            ElevatedButton(
+              onPressed: _toggleService,
+              child: Text(_serviceRunning ? 'Stop Service' : 'Start Service'),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _requestPermissions,
+              child: const Text('Request SMS Permissions'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 class MPesaTrackerApp extends StatelessWidget {
   const MPesaTrackerApp({Key? key}) : super(key: key);
