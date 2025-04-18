@@ -15,9 +15,13 @@
         android:icon="@mipmap/ic_launcher">
         
         <!-- Background Service -->
-        <service android:name="com.dexterous.flutterlocalnotifications.ForegroundService"
-                android:foregroundServiceType="dataSync"
-                android:exported="false" />
+        <service
+    android:name="id.flutter.flutter_background_service.BackgroundService"
+    android:foregroundServiceType="dataSync"
+    android:exported="false"
+    android:permission="android.permission.FOREGROUND_SERVICE" />
+
+
         
         <activity
             android:name=".MainActivity"
