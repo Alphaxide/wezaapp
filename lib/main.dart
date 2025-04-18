@@ -3,7 +3,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_background_service_android/flutter_background_service_android.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:telephony/telephony.dart';
+import 'package:flutter_sms_inbox/flutter_sms_inbox.dart';
 import 'dart:io';
 import 'dart:async';
 import 'dart:ui';
@@ -12,8 +12,8 @@ import 'package:weza/storage/storage_provider.dart';
 import 'package:weza/utils/mpesa_parser.dart';
 import 'package:weza/models/mpesa_message.dart';
 
-// SMS message handler for when app is in foreground
-void onMessageReceived(SmsMessage message) async {
+// SMS message handler for when a new M-Pesa message is detected
+void onMpesaMessageReceived(SmsMessage message) async {
   // Check if the message is from M-Pesa
   if (_isMpesaMessage(message.body ?? "")) {
     // Initialize storage
@@ -110,27 +110,33 @@ void onStart(ServiceInstance service) async {
     service.stopSelf();
   });
 
-  // Initialize telephony
-  final telephony = Telephony.instance;
+  // Initialize SMS query plugin
+  final SmsQuery query = SmsQuery();
   
   // Set up periodic SMS checking
   Timer.periodic(const Duration(minutes: 1), (timer) async {
-    await checkForMpesaMessages(telephony);
+    await checkForMpesaMessages(query);
   });
   
   // Initial check
-  await checkForMpesaMessages(telephony);
+  await checkForMpesaMessages(query);
 }
 
-Future<void> checkForMpesaMessages(Telephony telephony) async {
+Future<void> checkForMpesaMessages(SmsQuery query) async {
   try {
-    final messages = await telephony.getInboxSms(
-      columns: [SmsColumn.ADDRESS, SmsColumn.BODY, SmsColumn.DATE],
-      filter: SmsFilter.where(SmsColumn.DATE)
-          .greaterThan(DateTime.now().subtract(const Duration(hours: 1)).millisecondsSinceEpoch.toString()),
+    // Get messages from the last hour
+    final oneHourAgo = DateTime.now().subtract(const Duration(hours: 1));
+    final messages = await query.querySms(
+      kinds: [SmsQueryKind.inbox],
+      count: 20, // Limit to recent messages
     );
     
-    for (var message in messages) {
+    final recentMessages = messages.where(
+      (message) => message.date != null && 
+                   message.date!.isAfter(oneHourAgo)
+    );
+    
+    for (var message in recentMessages) {
       if (_isMpesaMessage(message.body ?? "")) {
         // Initialize storage
         final storage = getStorageImplementation();
@@ -140,7 +146,6 @@ Future<void> checkForMpesaMessages(Telephony telephony) async {
         final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
         
         // Store the parsed message if it doesn't exist
-        // You might want to check here if this message is already processed
         await storage.insertMessage(mpesaMessage);
         
         // Close storage connection
@@ -179,7 +184,8 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  final Telephony telephony = Telephony.instance;
+  final SmsQuery _query = SmsQuery();
+  Timer? _smsCheckTimer;
   
   @override
   void initState() {
@@ -187,16 +193,52 @@ class _MyAppState extends State<MyApp> {
     _initializeSmsListener();
   }
   
+  @override
+  void dispose() {
+    _smsCheckTimer?.cancel();
+    super.dispose();
+  }
+  
   Future<void> _initializeSmsListener() async {
     // Request SMS permissions
-    final permissionsGranted = await telephony.requestPhoneAndSmsPermissions;
+    final status = await Permission.sms.request();
     
-    if (permissionsGranted ?? false) {
-      // Listen for incoming SMS in foreground
-      telephony.listenIncomingSms(
-        onNewMessage: onMessageReceived,
-        listenInBackground: true,
+    if (status.isGranted) {
+      // Since flutter_sms_inbox doesn't have a listener for new messages,
+      // we'll poll for new messages periodically
+      _smsCheckTimer = Timer.periodic(const Duration(seconds: 30), (timer) async {
+        await _checkForNewMessages();
+      });
+      
+      // Do an immediate check
+      await _checkForNewMessages();
+    }
+  }
+  
+  DateTime? _lastCheckedTime;
+  
+  Future<void> _checkForNewMessages() async {
+    final now = DateTime.now();
+    final checkFrom = _lastCheckedTime ?? now.subtract(const Duration(minutes: 2));
+    _lastCheckedTime = now;
+    
+    try {
+      final messages = await _query.querySms(
+        kinds: [SmsQueryKind.inbox],
+        count: 10,
       );
+      
+      // Filter for messages that came after our last check
+      final newMessages = messages.where(
+        (message) => message.date != null && 
+                    message.date!.isAfter(checkFrom)
+      );
+      
+      for (var message in newMessages) {
+        onMpesaMessageReceived(message);
+      }
+    } catch (e) {
+      print('Error checking for new messages: $e');
     }
   }
 
