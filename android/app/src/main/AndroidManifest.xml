@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <!-- Permissions -->
     <uses-permission android:name="android.permission.RECEIVE_SMS"/>
     <uses-permission android:name="android.permission.READ_SMS"/>
@@ -19,7 +19,10 @@
     android:name="id.flutter.flutter_background_service.BackgroundService"
     android:foregroundServiceType="dataSync"
     android:exported="false"
-    android:permission="android.permission.FOREGROUND_SERVICE" />
+    tools:replace="android:exported"
+    android:permission="android.permission.FOREGROUND_SERVICE"
+    android:enabled="true" />
+
 
 
         
