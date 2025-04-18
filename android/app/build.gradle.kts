@@ -46,6 +46,12 @@ flutter {
 }
 
 // Add this dependencies block at the end
+// Change this line in the dependencies block
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.3")
+}
+
+// To this
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
