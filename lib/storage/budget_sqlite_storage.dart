@@ -135,9 +135,8 @@ CREATE TABLE budgets(
     return 0.0;
   }
 
+
+
   @override
-  Future<void> close() async {
-    final db = await database;
-    db.close();
-  }
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
