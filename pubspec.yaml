@@ -32,6 +32,7 @@ dependencies:
   flutter_local_notifications: ^19.1.0
   flutter_background_service_android: ^6.3.0
   flutter_background_service: ^5.1.0
+  flutter_launcher_icons: ^0.14.3
   
 dev_dependencies:
   flutter_test:
