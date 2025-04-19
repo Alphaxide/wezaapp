@@ -1,4 +1,3 @@
-
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
@@ -7,6 +6,7 @@ import '../models/mpesa_message.dart';
 
 class SqliteStorage implements MessageStorage {
   static Database? _database;
+  bool _isInitialized = false;
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -29,7 +29,7 @@ class SqliteStorage implements MessageStorage {
     await db.execute('''
 CREATE TABLE mpesa_messages(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  transactionCode TEXT,
+  transactionCode TEXT UNIQUE,
   transactionType TEXT,
   senderOrReceiverName TEXT,
   phoneNumber TEXT,
@@ -49,21 +49,57 @@ CREATE TABLE mpesa_messages(
   loanType TEXT DEFAULT ''
 )
     ''');
+    
+    // Create index on transactionCode for faster lookups
+    await db.execute('CREATE UNIQUE INDEX idx_transaction_code ON mpesa_messages(transactionCode)');
+  }
+
+  void _checkInitialized() {
+    if (!_isInitialized) {
+      throw Exception('SqliteStorage not initialized. Call initialize() first.');
+    }
   }
 
   @override
   Future<void> initialize() async {
     await database;
+    _isInitialized = true;
   }
 
   @override
   Future<int> insertMessage(MpesaMessage message) async {
+    _checkInitialized();
     final db = await database;
-    return await db.insert('mpesa_messages', message.toMap());
+    
+    try {
+      // Try to insert the message with UNIQUE constraint on transactionCode
+      return await db.insert(
+        'mpesa_messages', 
+        message.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.ignore // Ignores the insert if it conflicts
+      );
+    } on DatabaseException catch (e) {
+      if (e.isUniqueConstraintError()) {
+        // Find the existing message to return its ID
+        final List<Map<String, dynamic>> result = await db.query(
+          'mpesa_messages',
+          where: 'transactionCode = ?',
+          whereArgs: [message.transactionCode],
+          limit: 1
+        );
+        
+        if (result.isNotEmpty) {
+          return result.first['id'] as int;
+        }
+        return -1; // Return -1 to indicate duplicate
+      }
+      rethrow; // Rethrow if it's another kind of error
+    }
   }
 
   @override
   Future<List<MpesaMessage>> getAllMessages() async {
+    _checkInitialized();
     final db = await database;
     final List<Map<String, dynamic>> maps = await db.query('mpesa_messages');
     return List.generate(maps.length, (i) {
@@ -73,6 +109,7 @@ CREATE TABLE mpesa_messages(
 
   @override
   Future<MpesaMessage?> getMessage(int id) async {
+    _checkInitialized();
     final db = await database;
     final maps = await db.query(
       'mpesa_messages',
@@ -88,6 +125,7 @@ CREATE TABLE mpesa_messages(
 
   @override
   Future<void> deleteMessage(int id) async {
+    _checkInitialized();
     final db = await database;
     await db.delete(
       'mpesa_messages',
@@ -98,6 +136,7 @@ CREATE TABLE mpesa_messages(
 
   @override
   Future<void> updateMessage(MpesaMessage message) async {
+    _checkInitialized();
     final db = await database;
     await db.update(
       'mpesa_messages',
@@ -109,6 +148,7 @@ CREATE TABLE mpesa_messages(
 
   @override
   Future<List<MpesaMessage>> getMessagesByCategory(String category) async {
+    _checkInitialized();
     final db = await database;
     final List<Map<String, dynamic>> maps = await db.query(
       'mpesa_messages',
@@ -122,6 +162,7 @@ CREATE TABLE mpesa_messages(
 
   @override
   Future<List<MpesaMessage>> getMessagesByTransactionType(String transactionType) async {
+    _checkInitialized();
     final db = await database;
     final List<Map<String, dynamic>> maps = await db.query(
       'mpesa_messages',
@@ -133,9 +174,14 @@ CREATE TABLE mpesa_messages(
     });
   }
 
+
+
   @override
-  Future<void> close() async {
-    final db = await database;
-    db.close();
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+extension DatabaseExceptionExtension on DatabaseException {
+  bool isUniqueConstraintError() {
+    return this.toString().contains('UNIQUE constraint failed');
   }
 }

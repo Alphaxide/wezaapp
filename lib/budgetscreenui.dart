@@ -14,6 +14,8 @@ class BudgetScreen extends StatefulWidget {
 class _BudgetScreenState extends State<BudgetScreen> {
   final BudgetService _budgetService = BudgetService();
   bool _isLoading = true;
+  bool _hasError = false;
+  String _errorMessage = '';
   List<Budget> _budgets = [];
   double _totalBudget = 0.0;
   double _totalSpent = 0.0;
@@ -24,37 +26,105 @@ class _BudgetScreenState extends State<BudgetScreen> {
   @override
   void initState() {
     super.initState();
+    print("BudgetScreen: Initializing");
     _loadData();
   }
 
   Future<void> _loadData() async {
+    print("BudgetScreen: Loading data started");
+    
+    if (!mounted) return;
+    
     setState(() {
       _isLoading = true;
+      _hasError = false;
+      _errorMessage = '';
     });
 
-    await _budgetService.initialize();
-    final budgets = await _budgetService.getCurrentMonthBudgets();
-    final totalBudget = await _budgetService.getCurrentMonthTotalBudget();
-    final totalSpent = await _budgetService.getCurrentMonthTotalSpending();
-    final remainingDays = _budgetService.getRemainingDaysInMonth();
-    final currentMonth = _budgetService.getCurrentMonthName();
+    try {
+      print("BudgetScreen: Initializing budget service");
+      await _budgetService.initialize();
+      
+      print("BudgetScreen: Fetching current month budgets");
+      final budgets = await _budgetService.getCurrentMonthBudgets();
+      
+      print("BudgetScreen: Fetching total budget");
+      final totalBudget = await _budgetService.getCurrentMonthTotalBudget();
+      
+      print("BudgetScreen: Fetching total spending");
+      final totalSpent = await _budgetService.getCurrentMonthTotalSpending();
+      
+      print("BudgetScreen: Getting remaining days");
+      final remainingDays = _budgetService.getRemainingDaysInMonth();
+      
+      print("BudgetScreen: Getting current month name");
+      final currentMonth = _budgetService.getCurrentMonthName();
 
-    // Load spending for each category
-    Map<String, double> categorySpending = {};
-    for (var budget in budgets) {
-      final spent = await _budgetService.getSpendingForCategory(budget.category);
-      categorySpending[budget.category] = spent;
+      // Load spending for each category with null safety
+      print("BudgetScreen: Loading category spending");
+      Map<String, double> categorySpending = {};
+      
+      if (budgets != null && budgets.isNotEmpty) {
+        for (var budget in budgets) {
+          if (budget.category != null) {
+            print("BudgetScreen: Loading spending for category: ${budget.category}");
+            try {
+              final spent = await _budgetService.getSpendingForCategory(budget.category);
+              categorySpending[budget.category] = spent ?? 0.0;
+            } catch (e) {
+              print("BudgetScreen: Error loading spending for ${budget.category}: $e");
+              categorySpending[budget.category] = 0.0;
+            }
+          }
+        }
+      } else {
+        print("BudgetScreen: No budgets found or null");
+      }
+
+      if (!mounted) return;
+      
+      setState(() {
+        _budgets = budgets ?? [];
+        _totalBudget = totalBudget ?? 0.0;
+        _totalSpent = totalSpent ?? 0.0;
+        _remainingDays = remainingDays ?? 0;
+        _currentMonth = currentMonth ?? 'Current Month';
+        _categorySpending = categorySpending;
+        _isLoading = false;
+      });
+      
+      print("BudgetScreen: Data loaded successfully");
+      print("BudgetScreen: Budgets count: ${_budgets.length}");
+      print("BudgetScreen: Total budget: $_totalBudget");
+      print("BudgetScreen: Total spent: $_totalSpent");
+      
+    } catch (e) {
+      print("BudgetScreen: Error loading data: $e");
+      if (!mounted) return;
+      
+      setState(() {
+        _isLoading = false;
+        _hasError = true;
+        _errorMessage = e.toString();
+      });
+      
+      // Show error message to user
+      _showErrorSnackBar("Failed to load budget data. Please try again.");
     }
+  }
 
-    setState(() {
-      _budgets = budgets;
-      _totalBudget = totalBudget;
-      _totalSpent = totalSpent;
-      _remainingDays = remainingDays;
-      _currentMonth = currentMonth;
-      _categorySpending = categorySpending;
-      _isLoading = false;
-    });
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+        action: SnackBarAction(
+          label: 'Retry',
+          textColor: Colors.white,
+          onPressed: _loadData,
+        ),
+      ),
+    );
   }
 
   @override
@@ -63,60 +133,82 @@ class _BudgetScreenState extends State<BudgetScreen> {
       appBar: AppBar(
         title: const Text('Budget', style: TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: () async {
-              // Navigate to add budget screen
-              final result = await Navigator.pushNamed(context, '/add_budget');
-              if (result == true) {
-                _loadData();
-              }
-            },
-          ),
-        ],
+      
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _loadData,
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildBudgetSummaryCard(),
-                      const SizedBox(height: 24),
-                      Text(
-                        'Category Budgets',
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
-                      ),
-                      const SizedBox(height: 16),
-                      _budgets.isEmpty
-                          ? _buildNoBudgetsMessage()
-                          : _buildCategoryList(),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+      body: _buildBody(),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-            Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const AddBudgetCategoryScreen(),
-                          ),
-                        );
-         
+        onPressed: () { Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const AddBudgetCategoryScreen(),
+              ),
+            );
          
         },
         label: const Text('Create Budget'),
         icon: const Icon(Icons.add),
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_isLoading) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text("Loading budget data...", style: TextStyle(color: Colors.grey))
+          ],
+        )
+      );
+    }
+    
+    if (_hasError) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error_outline, size: 48, color: Colors.red),
+            const SizedBox(height: 16),
+            Text("Error loading data", style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 8),
+            Text(_errorMessage, style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: _loadData,
+              child: const Text("Try Again"),
+            )
+          ],
+        ),
+      );
+    }
+    
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildBudgetSummaryCard(),
+              const SizedBox(height: 24),
+              Text(
+                'Category Budgets',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+              ),
+              const SizedBox(height: 16),
+              _budgets.isEmpty
+                  ? _buildNoBudgetsMessage()
+                  : _buildCategoryList(),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -300,35 +392,60 @@ class _BudgetScreenState extends State<BudgetScreen> {
   }
 
   Widget _buildCategoryList() {
-    return ListView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: _budgets.length,
-      itemBuilder: (context, index) {
-        final budget = _budgets[index];
-        final spent = _categorySpending[budget.category] ?? 0.0;
-        final progress = budget.amount > 0 ? (spent / budget.amount).clamp(0.0, 1.0) : 0.0;
-        
-        return _CategoryBudgetCard(
-          category: budget.category,
-          budgeted: budget.amount,
-          spent: spent,
-          progress: progress,
-          onTap: () {
-            // Navigate to category detail
-            Navigator.pushNamed(
-              context,
-              '/category_detail',
-              arguments: {
-                'category': budget.category,
-                'budget': budget,
-                'spent': spent,
+    try {
+      return ListView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: _budgets.length,
+        itemBuilder: (context, index) {
+          try {
+            final budget = _budgets[index];
+            if (budget == null || budget.category == null) {
+              print("BudgetScreen: Skipping null budget or category at index $index");
+              return const SizedBox.shrink();
+            }
+            
+            final spent = _categorySpending[budget.category] ?? 0.0;
+            final progress = budget.amount > 0 ? (spent / budget.amount).clamp(0.0, 1.0) : 0.0;
+            
+            return _CategoryBudgetCard(
+              category: budget.category,
+              budgeted: budget.amount,
+              spent: spent,
+              progress: progress,
+              onTap: () {
+                print("BudgetScreen: Category ${budget.category} tapped");
+                try {
+                  Navigator.pushNamed(
+                    context,
+                    '/category_detail',
+                    arguments: {
+                      'category': budget.category,
+                      'budget': budget,
+                      'spent': spent,
+                    },
+                  ).then((value) {
+                    print("BudgetScreen: Returned from category detail with value: $value");
+                    _loadData();
+                  });
+                } catch (e) {
+                  print("BudgetScreen: Error navigating to category detail: $e");
+                  _showErrorSnackBar("Navigation error. Please try again.");
+                }
               },
-            ).then((_) => _loadData());
-          },
-        );
-      },
-    );
+            );
+          } catch (e) {
+            print("BudgetScreen: Error rendering budget at index $index: $e");
+            return const SizedBox.shrink();
+          }
+        },
+      );
+    } catch (e) {
+      print("BudgetScreen: Error building category list: $e");
+      return Center(
+        child: Text("Error displaying categories: ${e.toString()}"),
+      );
+    }
   }
 
   Color _getProgressColor(double progress) {
@@ -343,7 +460,12 @@ class _BudgetScreenState extends State<BudgetScreen> {
 
   @override
   void dispose() {
-    _budgetService.close();
+    print("BudgetScreen: Disposing");
+    try {
+      _budgetService.close();
+    } catch (e) {
+      print("BudgetScreen: Error closing budget service: $e");
+    }
     super.dispose();
   }
 }
@@ -370,7 +492,7 @@ class _BudgetSummaryItem extends StatelessWidget {
       children: [
         Container(
           padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
+          decoration: const BoxDecoration(
             color: Colors.white24,
             shape: BoxShape.circle,
           ),

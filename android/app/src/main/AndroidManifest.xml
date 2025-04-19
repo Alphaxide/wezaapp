@@ -1,15 +1,31 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <!-- Permissions -->
     <uses-permission android:name="android.permission.RECEIVE_SMS"/>
     <uses-permission android:name="android.permission.READ_SMS"/>
     <uses-permission android:name="android.permission.INTERNET"/>
-
-
+    <!-- Background Service Permissions -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  
     <application
         android:label="weza"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        
+        <!-- Background Service -->
+        <service
+    android:name="id.flutter.flutter_background_service.BackgroundService"
+    android:foregroundServiceType="dataSync"
+    android:exported="false"
+    tools:replace="android:exported"
+    android:permission="android.permission.FOREGROUND_SERVICE"
+    android:enabled="true" />
 
+
+
+        
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -24,19 +40,19 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
-              
+            
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-
+        
         <!-- Flutter tool config -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-
-        <!-- ✅ Receiver moved inside application -->
+        
+        <!-- SMS Receiver -->
         <receiver
             android:name="com.shounakmulay.telephony.sms.SmsReceiver"
             android:exported="true">
@@ -44,9 +60,8 @@
                 <action android:name="android.provider.Telephony.SMS_RECEIVED"/>
             </intent-filter>
         </receiver>
-
     </application>
-
+    
     <!-- Queries section stays outside -->
     <queries>
         <intent>

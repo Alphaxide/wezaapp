@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:weza/file_picker.dart';
+import 'package:weza/storage/storage_provider.dart';
 import 'transaction_service.dart';
 import 'transaction_model.dart';
 import 'models/mpesa_message.dart';
@@ -32,23 +33,77 @@ class _TransactionAnalysisScreenState extends State<TransactionAnalysisScreen> {
   }
 
   Future<void> _loadTransactions() async {
+    setState(() => _isLoading = true);
+    
     try {
+      // Ensure storage is initialized before loading transactions
+      final storage = MessageStorageProvider().getStorage();
+      await storage.initialize();
+      
       final loaded = await TransactionService.loadTransactions();
-      setState(() {
-        _transactions = loaded;
-        _categories = ['All Categories', ..._transactions.map((t) => t.category).toSet().toList()];
-        _isLoading = false;
-      });
+      
+      if (mounted) {
+        setState(() {
+          _transactions = loaded;
+          _categories = ['All Categories', ..._transactions.map((t) => t.category).toSet().toList()];
+          _isLoading = false;
+        });
+      }
     } catch (e) {
-      setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error loading transactions: ${e.toString()}'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      print('Error loading transactions: ${e.toString()}');
+      
+      // Handle database closed error
+      if (e.toString().contains('database is closed') || 
+          e.toString().contains('DatabaseException')) {
+        
+        // Try to reinitialize storage and reload
+        try {
+          final storageProvider = MessageStorageProvider();
+          await storageProvider.closeStorage();
+          final storage = storageProvider.getStorage();
+          await storage.initialize();
+          
+          // Try loading transactions again
+          final loaded = await TransactionService.loadTransactions();
+          
+          if (mounted) {
+            setState(() {
+              _transactions = loaded;
+              _categories = ['All Categories', ..._transactions.map((t) => t.category).toSet().toList()];
+              _isLoading = false;
+            });
+          }
+        } catch (retryError) {
+          if (mounted) {
+            setState(() => _isLoading = false);
+            _showErrorSnackBar('Database error: ${retryError.toString()}');
+          }
+        }
+      } else {
+        if (mounted) {
+          setState(() => _isLoading = false);
+          _showErrorSnackBar('Error loading transactions: ${e.toString()}');
+        }
+      }
     }
   }
+
+
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+        action: SnackBarAction(
+          label: 'Retry',
+          onPressed: _loadTransactions,
+          textColor: Colors.white,
+        ),
+        duration: const Duration(seconds: 10),
+      ),
+    );
+  }
+
 
   List<Transaction> get _filteredTransactions {
     List<Transaction> filtered = _transactions.where((t) {
@@ -277,13 +332,13 @@ Widget _buildAnalysisContent() {
                 icon: Icons.upload_file,
                 onPressed: () {
                   // Handle import action
-
-                        Navigator.push(
+                  Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => const ImportMessagesScreen(),
+                            builder: (context) => const MessageParserScreen(),
                           ),
                         );
+
                 },
               ),
             ],
@@ -705,12 +760,12 @@ Widget _buildMonthSelectorButton(BuildContext context, List<DateTime> availableM
     onPressed: () {
       _showMonthSelectionDialog(context, availableMonths);
     },
-    icon: const Icon(Icons.calendar_month, size: 16),
-    label: const Text('Select Months'),
+    icon: const Icon(Icons.calendar_month, size: 10),
+    label: const Text('Select'),
     style: ElevatedButton.styleFrom(
       backgroundColor: Theme.of(context).primaryColor,
       foregroundColor: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
       ),
@@ -1221,8 +1276,8 @@ class CategorySpendingTable extends StatelessWidget {
                         timeFrame,
                         style: TextStyle(
                           color: Theme.of(context).primaryColor,
-                          fontWeight: FontWeight.w500,
-                          fontSize: 14,
+                          fontWeight: FontWeight.w400,
+                          fontSize: 8,
                         ),
                       ),
                     ),
@@ -1454,7 +1509,7 @@ class MonthlySpendingTable extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      'Monthly Spending Summary',
+                      'Monthly Spending',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
