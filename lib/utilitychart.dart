@@ -765,7 +765,7 @@ Widget _buildMonthSelectorButton(BuildContext context, List<DateTime> availableM
     style: ElevatedButton.styleFrom(
       backgroundColor: Theme.of(context).primaryColor,
       foregroundColor: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
       ),
@@ -1509,7 +1509,7 @@ class MonthlySpendingTable extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      'Monthly Spending Summary',
+                      'Monthly Spending',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,

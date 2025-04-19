@@ -61,42 +61,39 @@ class _MessageParserScreenState extends State<MessageParserScreen> {
     });
 
     try {
-      // Split input into individual messages
-      List<String> messages = _splitMessages(_messagesController.text);
+      // Parse the entire text as a whole
+      String messageText = _messagesController.text;
       
-      // Parse each message
-      for (String message in messages) {
-        if (message.trim().isNotEmpty) {
-          try {
-            MpesaMessage parsedMessage = MpesaParser.parseSms(message);
-            if (parsedMessage.amount > 0) {
-              _parsedMessages.add(parsedMessage);
-              _successCount++;
-              
-              // Update category totals
-              String category = parsedMessage.category;
-              double amount = parsedMessage.amount;
-              
-              // For outgoing transactions, make the amount negative
-              if (parsedMessage.direction == 'Outgoing') {
-                amount = -amount;
-              }
-              
-              _categoryTotals.update(
-                category, 
-                (value) => value + amount, 
-                ifAbsent: () => amount
-              );
-              
-              // Update total amount
-              _totalAmount += amount;
-            } else {
-              _failedCount++;
-            }
-          } catch (e) {
-            _failedCount++;
+      try {
+        // Parse the full message text
+        MpesaMessage parsedMessage = MpesaParser.parseSms(messageText);
+        if (parsedMessage.amount > 0) {
+          _parsedMessages.add(parsedMessage);
+          _successCount++;
+          
+          // Update category totals
+          String category = parsedMessage.category;
+          double amount = parsedMessage.amount;
+          
+          // For outgoing transactions, make the amount negative
+          if (parsedMessage.direction == 'Outgoing') {
+            amount = -amount;
           }
+          
+          _categoryTotals.update(
+            category, 
+            (value) => value + amount, 
+            ifAbsent: () => amount
+          );
+          
+          // Update total amount
+          _totalAmount += amount;
+        } else {
+          _failedCount++;
         }
+      } catch (e) {
+        _failedCount++;
+        _showSnackBar('Failed to parse message: ${e.toString()}');
       }
       
       // Sort transactions by date (newest first)
@@ -107,43 +104,17 @@ class _MessageParserScreenState extends State<MessageParserScreen> {
         _isLoading = false;
       });
       
-      _showSnackBar('Successfully parsed $_successCount messages, $_failedCount failed');
+      if (_successCount > 0) {
+        _showSnackBar('Successfully parsed $_successCount messages');
+      } else {
+        _showSnackBar('No valid messages found. Please check the format.');
+      }
     } catch (e) {
       setState(() {
         _isLoading = false;
       });
       _showSnackBar('Error parsing messages: ${e.toString()}');
     }
-  }
-
-  List<String> _splitMessages(String input) {
-    // Try to intelligently split the pasted text into individual messages
-    // Common patterns in M-Pesa messages
-    List<String> patterns = [
-      r'(?=\s*(?:\w+\s+)+\s*confirmed\.)',  // Messages that end with "confirmed."
-      r'(?=\s*\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2}\s*[AP]M)', // Messages with date patterns
-      r'(?=\s*[A-Z][a-zA-Z0-9]{9})', // Messages starting with transaction IDs
-      r'(?=\s*(?:You have received|Confirmed))', // Messages starting with You have received
-    ];
-    
-    // Create a combined pattern
-    String combinedPattern = patterns.join('|');
-    
-    // Split the input text using the combined pattern
-    List<String> messages = input.split(RegExp(combinedPattern));
-    
-    // Clean up the messages
-    messages = messages.map((msg) => msg.trim()).where((msg) => msg.isNotEmpty).toList();
-    
-    // If no messages were found using the smart splitting, fall back to newline splitting
-    if (messages.isEmpty) {
-      messages = input.split('\n\n');
-      if (messages.length <= 1) {
-        messages = input.split('\n');
-      }
-    }
-    
-    return messages;
   }
 
   void _showSnackBar(String message) {
@@ -283,7 +254,7 @@ Future<void> _saveTransactions() async {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'Paste your M-Pesa SMS messages below to analyze and categorize them',
+                    'Paste your M-Pesa SMS message below to analyze and categorize it',
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.85),
                       fontSize: 16,
@@ -306,7 +277,7 @@ Future<void> _saveTransactions() async {
             onPressed: _parseMessages,
             icon: const Icon(Icons.auto_graph),
             label: const Text(
-              'Parse Messages',
+              'Parse Message',
               style: TextStyle(
                 fontWeight: FontWeight.w600,
                 letterSpacing: 0.5,
@@ -328,7 +299,7 @@ Future<void> _saveTransactions() async {
         children: [
           const SizedBox(height: 16),
           const Text(
-            'Paste M-Pesa Messages',
+            'Paste M-Pesa Message',
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
@@ -337,7 +308,7 @@ Future<void> _saveTransactions() async {
           ),
           const SizedBox(height: 12),
           Text(
-            'Copy all messages from your SMS app and paste them below',
+            'Copy the message from your SMS app and paste it below',
             style: TextStyle(
               fontSize: 14,
               color: Colors.grey[600],
@@ -367,7 +338,7 @@ Future<void> _saveTransactions() async {
                 textAlignVertical: TextAlignVertical.top,
                 style: const TextStyle(fontSize: 16),
                 decoration: InputDecoration(
-                  hintText: 'Paste your M-Pesa messages here...',
+                  hintText: 'Paste your M-Pesa message here...',
                   hintStyle: TextStyle(color: Colors.grey[400]),
                   border: InputBorder.none,
                   contentPadding: const EdgeInsets.all(16),

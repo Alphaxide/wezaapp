@@ -29,7 +29,7 @@ class SqliteStorage implements MessageStorage {
     await db.execute('''
 CREATE TABLE mpesa_messages(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  transactionCode TEXT,
+  transactionCode TEXT UNIQUE,
   transactionType TEXT,
   senderOrReceiverName TEXT,
   phoneNumber TEXT,
@@ -49,6 +49,9 @@ CREATE TABLE mpesa_messages(
   loanType TEXT DEFAULT ''
 )
     ''');
+    
+    // Create index on transactionCode for faster lookups
+    await db.execute('CREATE UNIQUE INDEX idx_transaction_code ON mpesa_messages(transactionCode)');
   }
 
   void _checkInitialized() {
@@ -67,7 +70,31 @@ CREATE TABLE mpesa_messages(
   Future<int> insertMessage(MpesaMessage message) async {
     _checkInitialized();
     final db = await database;
-    return await db.insert('mpesa_messages', message.toMap());
+    
+    try {
+      // Try to insert the message with UNIQUE constraint on transactionCode
+      return await db.insert(
+        'mpesa_messages', 
+        message.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.ignore // Ignores the insert if it conflicts
+      );
+    } on DatabaseException catch (e) {
+      if (e.isUniqueConstraintError()) {
+        // Find the existing message to return its ID
+        final List<Map<String, dynamic>> result = await db.query(
+          'mpesa_messages',
+          where: 'transactionCode = ?',
+          whereArgs: [message.transactionCode],
+          limit: 1
+        );
+        
+        if (result.isNotEmpty) {
+          return result.first['id'] as int;
+        }
+        return -1; // Return -1 to indicate duplicate
+      }
+      rethrow; // Rethrow if it's another kind of error
+    }
   }
 
   @override
@@ -147,6 +174,14 @@ CREATE TABLE mpesa_messages(
     });
   }
 
+
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+extension DatabaseExceptionExtension on DatabaseException {
+  bool isUniqueConstraintError() {
+    return this.toString().contains('UNIQUE constraint failed');
+  }
 }
