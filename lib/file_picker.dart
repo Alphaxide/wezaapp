@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:weza/storage/storage_provider.dart';
 import '../models/mpesa_message.dart';
 import '../utils/category_helper.dart';
 import '../service/budget_service.dart';
@@ -166,31 +167,45 @@ class _MessageParserScreenState extends State<MessageParserScreen> {
     });
   }
 
-  Future<void> _saveTransactions() async {
+Future<int> _insertMpesaTransaction(MpesaMessage message) async {
+  // Use the message storage provider to insert the message
+  final storage = MessageStorageProvider().getStorage();
+  return await storage.insertMessage(message);
+}
+
+Future<int> _saveMpesaTransactions(List<MpesaMessage> messages) async {
+  int savedCount = 0;
+  for (MpesaMessage message in messages) {
+    await _insertMpesaTransaction(message);
+    savedCount++;
+  }
+  return savedCount;
+}
+
+Future<void> _saveTransactions() async {
+  setState(() {
+    _isLoading = true;
+  });
+  
+  try {
+    // Save all transactions using our new function
+    int savedCount = await _saveMpesaTransactions(_parsedMessages);
+    
     setState(() {
-      _isLoading = true;
+      _isLoading = false;
     });
     
-    try {
-      // Here you would add code to save the transactions to your database
-      // For example:
-      // await _budgetService.saveMpesaTransactions(_parsedMessages);
-      
-      setState(() {
-        _isLoading = false;
-      });
-      
-      _showSnackBar('Transactions saved successfully!');
-      
-      // Optionally clear the screen after saving
-      _clearAll();
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-      });
-      _showSnackBar('Error saving transactions: ${e.toString()}');
-    }
+    _showSnackBar('Successfully saved $savedCount transactions!');
+    
+    // Clear the screen after saving
+    _clearAll();
+  } catch (e) {
+    setState(() {
+      _isLoading = false;
+    });
+    _showSnackBar('Error saving transactions: ${e.toString()}');
   }
+}
 
   @override
   Widget build(BuildContext context) {

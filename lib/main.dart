@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import "package:flutter/material.dart";
 import "package:intl/intl.dart";
 import "package:weza/addbudget_screen.dart";
 import "package:weza/budgetscreenui.dart";
@@ -7,183 +7,26 @@ import "package:weza/models/mpesa_message.dart";
 import "package:weza/storage/mpesa_storage.dart";
 import "package:weza/storage/storage_provider.dart";
 import "package:weza/utilitychart.dart";
+
 import 'package:flutter/services.dart';
 import 'package:weza/utils/mpesa_parser.dart';
 import 'dart:async';
 import 'service/budget_service.dart';
 import 'storage/storage_provider.dart';
-import 'package:flutter_background_service/flutter_background_service.dart';
-import 'package:flutter_background_service_android/flutter_background_service_android.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter_sms_inbox/flutter_sms_inbox.dart';
-import 'dart:io';
+
+// Background message handler
+
 import 'dart:isolate';
 import 'dart:ui';
 
-// SMS message handler for when a new M-Pesa message is detected
-void onMpesaMessageReceived(SmsMessage message) async {
-  // Check if the message is from M-Pesa
-  if (_isMpesaMessage(message.body ?? "")) {
-    // Initialize storage
-    final storage = getStorageImplementation();
-    await storage.initialize();
-    
-    // Parse the M-Pesa message
-    final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
-    
-    // Store the parsed message
-    await storage.insertMessage(mpesaMessage);
-  }
-}
 
-// Check if a message is from M-Pesa
-bool _isMpesaMessage(String message) {
-  // Common M-Pesa message keywords
-  final mpesaKeywords = [
-    'M-PESA', 'MPESA', 'confirmed', 'transaction', 'sent to',
-    'received', 'withdrawn', 'paid to', 'Buy Goods',
-    'Safaricom', 'Paybill', 'Till Number'
-  ];
-  
-  message = message.toUpperCase();
-  return mpesaKeywords.any((keyword) => message.contains(keyword.toUpperCase()));
-}
-
-Future<void> initializeBackgroundService() async {
-  final service = FlutterBackgroundService();
-
-  const AndroidNotificationChannel channel = AndroidNotificationChannel(
-    'weza_foreground',
-    'Weza Foreground Service',
-    description: 'Listens for M-Pesa messages',
-    importance: Importance.low,
-  );
-
-  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-      FlutterLocalNotificationsPlugin();
-
-  if (Platform.isAndroid) {
-    await flutterLocalNotificationsPlugin.initialize(
-      const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-      ),
-    );
-
-    await flutterLocalNotificationsPlugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(channel);
-  }
-
-  await service.configure(
-    androidConfiguration: AndroidConfiguration(
-      onStart: onStart,
-      autoStart: true,
-      isForegroundMode: true,
-      notificationChannelId: 'weza_foreground',
-      initialNotificationTitle: 'Weza M-Pesa Listener',
-      initialNotificationContent: 'Monitoring M-Pesa messages',
-      foregroundServiceNotificationId: 888,
-    ),
-    iosConfiguration: IosConfiguration(
-      autoStart: true,
-      onForeground: onStart,
-      onBackground: onIosBackground,
-    ),
-  );
-
-  service.startService();
-}
-
-@pragma('vm:entry-point')
-Future<bool> onIosBackground(ServiceInstance service) async {
-  return true;
-}
-
-@pragma('vm:entry-point')
-void onStart(ServiceInstance service) async {
-  DartPluginRegistrant.ensureInitialized();
-
-  if (service is AndroidServiceInstance) {
-    service.on('setAsForeground').listen((event) {
-      service.setAsForegroundService();
-    });
-
-    service.on('setAsBackground').listen((event) {
-      service.setAsBackgroundService();
-    });
-  }
-
-  service.on('stopService').listen((event) {
-    service.stopSelf();
-  });
-
-  // Initialize SMS query plugin
-  final SmsQuery query = SmsQuery();
-  
-  // Set up periodic SMS checking
-  Timer.periodic(const Duration(minutes: 1), (timer) async {
-    await checkForMpesaMessages(query);
-  });
-  
-  // Initial check
-  await checkForMpesaMessages(query);
-}
-
-Future<void> checkForMpesaMessages(SmsQuery query) async {
-  try {
-    // Get messages from the last hour
-    final oneHourAgo = DateTime.now().subtract(const Duration(hours: 1));
-    final messages = await query.querySms(
-      kinds: [SmsQueryKind.inbox],
-      count: 20, // Limit to recent messages
-    );
-    
-    final recentMessages = messages.where(
-      (message) => message.date != null && 
-                   message.date!.isAfter(oneHourAgo)
-    );
-    
-    for (var message in recentMessages) {
-      if (_isMpesaMessage(message.body ?? "")) {
-        // Initialize storage
-        final storage = getStorageImplementation();
-        await storage.initialize();
-        
-        // Parse the M-Pesa message
-        final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
-        
-        // Store the parsed message if it doesn't exist
-        await storage.insertMessage(mpesaMessage);
-        
-        // Close storage connection
-        await storage.close();
-      }
-    }
-  } catch (e) {
-    print('Error checking for M-Pesa messages: $e');
-  }
-}
-
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  
-  // Request permissions
-  await [
-    Permission.sms,
-    Permission.notification,
-  ].request();
-  
-  // Initialize background service
-  await initializeBackgroundService();
-  
-  // Initialize storage for the main app
-  final storage = getStorageImplementation();
-  await storage.initialize();
-  
+void main() {
   runApp(const MPesaTrackerApp());
 }
+
+
+
+// Global constants
 
 class MPesaTrackerApp extends StatelessWidget {
   const MPesaTrackerApp({Key? key}) : super(key: key);
@@ -227,6 +70,8 @@ class Transaction {
   });
 }
 
+
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
 
@@ -234,11 +79,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
-  final SmsQuery _query = SmsQuery();
-  Timer? _smsCheckTimer;
-  DateTime? _lastCheckedTime;
   
   final List<Widget> _screens = [
     const DashboardScreen(),
@@ -246,69 +88,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     const BudgetScreen(),
     const TransactionAnalysisScreen(),
   ];
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _initializeSmsListener();
-  }
-  
-  @override
-  void dispose() {
-    _smsCheckTimer?.cancel();
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-  
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      // App came to foreground, check for new messages
-      _checkForNewMessages();
-    }
-  }
-  
-  Future<void> _initializeSmsListener() async {
-    // Request SMS permissions
-    final status = await Permission.sms.request();
-    
-    if (status.isGranted) {
-      // Since flutter_sms_inbox doesn't have a listener for new messages,
-      // we'll poll for new messages periodically
-      _smsCheckTimer = Timer.periodic(const Duration(seconds: 30), (timer) async {
-        await _checkForNewMessages();
-      });
-      
-      // Do an immediate check
-      await _checkForNewMessages();
-    }
-  }
-  
-  Future<void> _checkForNewMessages() async {
-    final now = DateTime.now();
-    final checkFrom = _lastCheckedTime ?? now.subtract(const Duration(minutes: 2));
-    _lastCheckedTime = now;
-    
-    try {
-      final messages = await _query.querySms(
-        kinds: [SmsQueryKind.inbox],
-        count: 10,
-      );
-      
-      // Filter for messages that came after our last check
-      final newMessages = messages.where(
-        (message) => message.date != null && 
-                    message.date!.isAfter(checkFrom)
-      );
-      
-      for (var message in newMessages) {
-        onMpesaMessageReceived(message);
-      }
-    } catch (e) {
-      print('Error checking for new messages: $e');
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1763,15 +1542,9 @@ class TransactionDetailsScreen extends StatelessWidget {
                         ),
                       ],
                       
-
                       const SizedBox(height: 20),
-                      // Category
-                      _detailRow(
-                        'Category',
-                        transaction.category,
-                        Icons.category_outlined,
-                        Colors.blue[800]!,
-                      ),
+                      // Category with edit button
+                      _categoryRow(context, transaction),
                     ],
                   ),
                 ),
@@ -1874,8 +1647,228 @@ class TransactionDetailsScreen extends StatelessWidget {
     );
   }
 
+  Widget _categoryRow(BuildContext context, MpesaMessage transaction) {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.blue[800]!.withOpacity(0.1),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            Icons.category_outlined,
+            color: Colors.blue[800]!,
+            size: 20,
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Category',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey[600],
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                transaction.category,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                ),
+              ),
+            ],
+          ),
+        ),
+        // Edit category button
+        InkWell(
+          onTap: () => _showCategoryBottomSheet(context, transaction),
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.grey[200],
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.edit,
+                  size: 16,
+                  color: Colors.blue[800],
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Edit',
+                  style: TextStyle(
+                    color: Colors.blue[800],
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showCategoryBottomSheet(BuildContext context, MpesaMessage transaction) {
+    // Define available categories
+    final categories = [
+      'Food',
+      'Transport',
+      'Shopping',
+      'Utilities',
+      'Entertainment',
+      'Rent',
+      'Education',
+      'Health',
+      'Income',
+      'Business',
+      'Personal',
+      'Uncategorized',
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(25.0)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setState) {
+            return Container(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Center(
+                    child: Text(
+                      'Select Category',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Expanded(
+                    child: GridView.builder(
+                      physics: const BouncingScrollPhysics(),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                        childAspectRatio: 1.3,
+                      ),
+                      itemCount: categories.length,
+                      itemBuilder: (context, index) {
+                        final category = categories[index];
+                        final isSelected = category == transaction.category;
+                        
+                        return InkWell(
+                          onTap: () {
+                            _updateCategory(context, transaction, category);
+                          },
+                          borderRadius: BorderRadius.circular(10),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: isSelected ? Colors.blue.withOpacity(0.1) : Colors.grey[100],
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: isSelected ? Colors.blue : Colors.grey[300]!,
+                                width: isSelected ? 2 : 1,
+                              ),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              category,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: isSelected ? Colors.blue : Colors.black87,
+                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      child: const Text('Close'),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _updateCategory(BuildContext context, MpesaMessage transaction, String newCategory) async {
+    if (transaction.category == newCategory) {
+      Navigator.pop(context);
+      return;
+    }
+
+    try {
+      // Create updated transaction with new category
+      final updatedTransaction = transaction.copyWith(category: newCategory);
+      
+      // Get storage implementation
+      final storage = getStorageImplementation();
+      
+      // Update the transaction in the database
+      await storage.updateMessage(updatedTransaction);
+      
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Category updated to $newCategory'),
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      
+      // Close bottom sheet
+      Navigator.pop(context);
+      
+      // Return to previous screen with updated transaction
+      Navigator.pop(context, updatedTransaction);
+    } catch (e) {
+      // Show error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to update category: ${e.toString()}'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      Navigator.pop(context);
+    }
+  }
+
   Color _getStatusColor(String direction) {
     return direction == 'Incoming' ? Colors.green[700]! : Colors.red[700]!;
   }
 }
-

@@ -760,12 +760,12 @@ Widget _buildMonthSelectorButton(BuildContext context, List<DateTime> availableM
     onPressed: () {
       _showMonthSelectionDialog(context, availableMonths);
     },
-    icon: const Icon(Icons.calendar_month, size: 16),
+    icon: const Icon(Icons.calendar_month, size: 10),
     label: const Text('Select'),
     style: ElevatedButton.styleFrom(
       backgroundColor: Theme.of(context).primaryColor,
       foregroundColor: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 6),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
       ),
@@ -1276,7 +1276,7 @@ class CategorySpendingTable extends StatelessWidget {
                         timeFrame,
                         style: TextStyle(
                           color: Theme.of(context).primaryColor,
-                          fontWeight: FontWeight.w200,
+                          fontWeight: FontWeight.w400,
                           fontSize: 8,
                         ),
                       ),
