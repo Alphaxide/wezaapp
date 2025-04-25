@@ -130,11 +130,11 @@ class _BudgetScreenState extends State<BudgetScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Budget', style: TextStyle(fontWeight: FontWeight.bold)),
-        centerTitle: true,
+      backgroundColor: Colors.white,
       
-      ),
+
+
+
       body: _buildBody(),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () { Navigator.push(
@@ -412,27 +412,8 @@ class _BudgetScreenState extends State<BudgetScreen> {
               category: budget.category,
               budgeted: budget.amount,
               spent: spent,
-              progress: progress,
-              onTap: () {
-                print("BudgetScreen: Category ${budget.category} tapped");
-                try {
-                  Navigator.pushNamed(
-                    context,
-                    '/category_detail',
-                    arguments: {
-                      'category': budget.category,
-                      'budget': budget,
-                      'spent': spent,
-                    },
-                  ).then((value) {
-                    print("BudgetScreen: Returned from category detail with value: $value");
-                    _loadData();
-                  });
-                } catch (e) {
-                  print("BudgetScreen: Error navigating to category detail: $e");
-                  _showErrorSnackBar("Navigation error. Please try again.");
-                }
-              },
+              progress: progress, onTap: () {  },
+              
             );
           } catch (e) {
             print("BudgetScreen: Error rendering budget at index $index: $e");

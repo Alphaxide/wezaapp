@@ -98,6 +98,56 @@ CREATE TABLE mpesa_messages(
   }
 
   @override
+  Future<bool> transactionExists(String transactionCode) async {
+    _checkInitialized();
+    final db = await database;
+    
+    final result = await db.query(
+      'mpesa_messages',
+      where: 'transactionCode = ?',
+      whereArgs: [transactionCode],
+      limit: 1
+    );
+    
+    return result.isNotEmpty;
+  }
+
+  @override
+  Future<MpesaMessage?> getMessageByTransactionCode(String transactionCode) async {
+    _checkInitialized();
+    final db = await database;
+    
+    final result = await db.query(
+      'mpesa_messages',
+      where: 'transactionCode = ?',
+      whereArgs: [transactionCode],
+      limit: 1
+    );
+    
+    if (result.isNotEmpty) {
+      return MpesaMessage.fromMap(result.first);
+    }
+    
+    return null;
+  }
+
+  @override
+  Future<int> insertMessageIfNotExists(MpesaMessage message) async {
+    _checkInitialized();
+    
+    // Check if message already exists
+    bool exists = await transactionExists(message.transactionCode);
+    
+    if (!exists) {
+      return await insertMessage(message);
+    } else {
+      // Get the ID of the existing message
+      final existingMessage = await getMessageByTransactionCode(message.transactionCode);
+      return existingMessage?.id ?? -1;
+    }
+  }
+
+  @override
   Future<List<MpesaMessage>> getAllMessages() async {
     _checkInitialized();
     final db = await database;
@@ -174,7 +224,7 @@ CREATE TABLE mpesa_messages(
     });
   }
 
-
+  
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);

@@ -1,3 +1,5 @@
+
+
 import 'package:flutter/material.dart';
 import "package:intl/intl.dart";
 import "package:weza/addbudget_screen.dart";
@@ -20,10 +22,51 @@ import 'package:flutter_sms_inbox/flutter_sms_inbox.dart';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:ui';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:workmanager/workmanager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 
-// SMS message handler for when a new M-Pesa message is detected
-void onMpesaMessageReceived(SmsMessage message) async {
-  // Check if the message is from M-Pesa
+// Global constants
+const String _isolateName = 'mpesa_isolate';
+const String MPESA_LAST_SCAN_TIME = 'mpesa_last_scan_time';
+const int BACKGROUND_SCAN_INTERVAL_MINUTES = 15;
+const int MAX_SMS_TO_QUERY = 100; // Increased from 20
+const int PERIODIC_JOB_ID = 12345;
+
+// Entry point for workmanager background task
+@pragma('vm:entry-point')
+void callbackDispatcher() {
+  Workmanager().executeTask((task, inputData) async {
+    // Initialize storage first
+    final storage = getStorageImplementation();
+    await storage.initialize();
+    
+    // Then scan messages
+    await scanAllMpesaMessages();
+    
+    // Close storage connection
+    await storage.close();
+    
+    return true;
+  });
+}
+
+// Entry point for alarm manager background task
+@pragma('vm:entry-point')
+void alarmCallback() async {
+  // This runs in an isolated Dart environment.
+  final storage = getStorageImplementation();
+  await storage.initialize();
+  
+  await scanAllMpesaMessages();
+  
+  await storage.close();
+}
+
+// Entry point for processing SMS messages in background
+@pragma('vm:entry-point')
+Future<void> processSmsInBackground(SmsMessage message) async {
   if (_isMpesaMessage(message.body ?? "")) {
     // Initialize storage
     final storage = getStorageImplementation();
@@ -34,25 +77,150 @@ void onMpesaMessageReceived(SmsMessage message) async {
     
     // Store the parsed message
     await storage.insertMessage(mpesaMessage);
+    
+    // Close storage connection
+    await storage.close();
   }
 }
 
-// Check if a message is from M-Pesa
+// Separate background scan function that can be called from multiple places
+Future<void> scanAllMpesaMessages() async {
+  try {
+    // Get shared preferences to track last scan time
+    final prefs = await SharedPreferences.getInstance();
+    final lastScanTime = prefs.getInt(MPESA_LAST_SCAN_TIME) ?? 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    
+    // Initialize SMS query plugin
+    final SmsQuery query = SmsQuery();
+    
+    // Query both inbox and sent messages
+    await _processSmsFolder(query, SmsQueryKind.inbox, lastScanTime);
+    await _processSmsFolder(query, SmsQueryKind.sent, lastScanTime);
+    
+    // Update last scan time
+    await prefs.setInt(MPESA_LAST_SCAN_TIME, now);
+    
+  } catch (e) {
+    print('Error in scanAllMpesaMessages: $e');
+  }
+}
+
+Future<void> _processSmsFolder(SmsQuery query, SmsQueryKind kind, int lastScanTime) async {
+  try {
+    // Get messages since the last scan time
+    DateTime lastScan = DateTime.fromMillisecondsSinceEpoch(lastScanTime);
+    
+    // Fetch more messages to ensure we don't miss any
+    final List<SmsMessage> messages = await query.querySms(
+      kinds: [kind],
+      count: MAX_SMS_TO_QUERY,
+    );
+    
+    // Initialize storage inside the function to ensure it's initialized even when called independently
+    final storage = getStorageImplementation();
+    await storage.initialize();
+    
+    int processedCount = 0;
+    
+    for (var message in messages) {
+      // Process messages that arrived after the last scan
+      if (message.date != null && 
+          (lastScanTime == 0 || message.date!.isAfter(lastScan)) && 
+          _isMpesaMessage(message.body ?? "")) {
+        
+        // Parse the M-Pesa message
+        final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
+        
+        // Check if transaction already exists to avoid duplicates
+        bool exists = await storage.transactionExists(mpesaMessage.transactionCode);
+        
+        if (!exists) {
+          try {
+            await storage.insertMessage(mpesaMessage);
+            processedCount++;
+          } catch (e) {
+            print('Error inserting message: $e');
+          }
+        }
+      }
+    }
+    
+    print('Processed $processedCount ${kind == SmsQueryKind.inbox ? "inbox" : "sent"} M-Pesa messages');
+    
+    // Close storage connection
+    await storage.close();
+  } catch (e) {
+    print('Error processing SMS folder ${kind.toString()}: $e');
+  }
+}
+
+// Enhanced check for M-Pesa messages to catch more variants
 bool _isMpesaMessage(String message) {
-  // Common M-Pesa message keywords
+  if (message.isEmpty) return false;
+  
+  // Common M-Pesa message keywords with expanded coverage
   final mpesaKeywords = [
     'M-PESA', 'MPESA', 'confirmed', 'transaction', 'sent to',
-    'received', 'withdrawn', 'paid to', 'Buy Goods',
-    'Safaricom', 'Paybill', 'Till Number'
+    'received', 'withdrawn', 'withdrawn at', 'deposited', 'paid to', 
+    'Buy Goods', 'Safaricom', 'Paybill', 'Till Number', 'airtime',
+    'Fuliza', 'Mshwari', 'KCB', 'Okoa', 'reversal', 'Pochi', 'Agent',
+    'New M-PESA balance', 'PESA balance', 'ATM'
   ];
   
   message = message.toUpperCase();
   return mpesaKeywords.any((keyword) => message.contains(keyword.toUpperCase()));
 }
 
+// Check if the device is running Android 12 or higher
+Future<bool> isAndroid12OrHigher() async {
+  if (!Platform.isAndroid) return false;
+  
+  DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
+  AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
+  return androidInfo.version.sdkInt >= 31; // Android 12 is API level 31
+}
+
+// Setup SMS inbox for periodic polling
+Future<void> setupSmsInbox() async {
+  // Request SMS permissions
+  final status = await Permission.sms.request();
+  
+  if (status.isGranted) {
+    // Since flutter_sms_inbox doesn't have a direct listener for new messages,
+    // we'll implement polling in the app lifecycle and background service
+    print('SMS permissions granted. Polling setup will be handled in background service.');
+  } else {
+    print('SMS permissions not granted. Cannot monitor for M-Pesa messages.');
+  }
+}
+
+// Helper method to process a single M-Pesa message
+Future<void> processMpesaMessage(String messageText) async {
+  try {
+    final storage = getStorageImplementation();
+    await storage.initialize();
+    
+    final mpesaMessage = MpesaParser.parseSms(messageText);
+    
+    // Check if transaction already exists
+    bool exists = await storage.transactionExists(mpesaMessage.transactionCode);
+    
+    if (!exists) {
+      await storage.insertMessage(mpesaMessage);
+    }
+    
+    await storage.close();
+  } catch (e) {
+    print('Error processing M-Pesa message: $e');
+  }
+}
+
+// Initialize the background service with more robust configuration
 Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
 
+  // Create notification channel
   const AndroidNotificationChannel channel = AndroidNotificationChannel(
     'weza_foreground',
     'Weza Foreground Service',
@@ -85,6 +253,7 @@ Future<void> initializeBackgroundService() async {
       initialNotificationTitle: 'Weza M-Pesa Listener',
       initialNotificationContent: 'Monitoring M-Pesa messages',
       foregroundServiceNotificationId: 888,
+      autoStartOnBoot: true, // Start on device boot
     ),
     iosConfiguration: IosConfiguration(
       autoStart: true,
@@ -93,6 +262,7 @@ Future<void> initializeBackgroundService() async {
     ),
   );
 
+  // Start the service
   service.startService();
 }
 
@@ -101,6 +271,7 @@ Future<bool> onIosBackground(ServiceInstance service) async {
   return true;
 }
 
+// Enhanced onStart handler for the foreground service
 @pragma('vm:entry-point')
 void onStart(ServiceInstance service) async {
   DartPluginRegistrant.ensureInitialized();
@@ -108,9 +279,12 @@ void onStart(ServiceInstance service) async {
   if (service is AndroidServiceInstance) {
     await service.setForegroundNotificationInfo(
       title: "Weza M-Pesa Listener",
-      content: "Monitoring M-Pesa messages in background",
+      content: "Monitoring M-Pesa messages",
     );
 
+    // Set as foreground service
+    service.setAsForegroundService();
+    
     service.on('setAsForeground').listen((event) {
       service.setAsForegroundService();
     });
@@ -124,66 +298,145 @@ void onStart(ServiceInstance service) async {
     service.stopSelf();
   });
 
-  // Initialize SMS query plugin
+  // Initialize storage
+  final storage = getStorageImplementation();
+  await storage.initialize();
+  
+  // Initial scan of messages
+  await scanAllMpesaMessages();
+  
+  // Close storage connection to prevent leaks
+  await storage.close();
+
+  // Create SmsQuery instance for periodic checks
   final SmsQuery query = SmsQuery();
+  DateTime? lastCheckTime;
 
-  // Periodic SMS checking
+  // Periodic monitoring with more frequent intervals
   Timer.periodic(const Duration(minutes: 1), (timer) async {
-    await checkForMpesaMessages(query);
-  });
-
-  // Initial check
-  await checkForMpesaMessages(query);
-}
-
-
-
-Future<void> checkForMpesaMessages(SmsQuery query) async {
-  try {
-    // Get messages from the last hour
-    final oneHourAgo = DateTime.now().subtract(const Duration(hours: 10));
-    final messages = await query.querySms(
-      kinds: [SmsQueryKind.inbox],
-      count: 20, // Limit to recent messages
-    );
+    if (lastCheckTime == null) {
+      lastCheckTime = DateTime.now().subtract(const Duration(minutes: 5));
+    }
     
-    final recentMessages = messages.where(
-      (message) => message.date != null && 
-                   message.date!.isAfter(oneHourAgo)
-    );
-    
-    for (var message in recentMessages) {
-      if (_isMpesaMessage(message.body ?? "")) {
-        // Initialize storage
+    try {
+      // Query for new messages since last check
+      final List<SmsMessage> newMessages = await query.querySms(
+        kinds: [SmsQueryKind.inbox],
+        count: 20,
+        address: '', // All messages
+      );
+      
+      // Filter for new M-Pesa messages
+      final mpesaMessages = newMessages.where((message) => 
+        message.date != null && 
+        message.date!.isAfter(lastCheckTime!) && 
+        _isMpesaMessage(message.body ?? "")
+      ).toList();
+      
+      // Process new M-Pesa messages
+      if (mpesaMessages.isNotEmpty) {
+        // Initialize storage for this batch
         final storage = getStorageImplementation();
         await storage.initialize();
         
-        // Parse the M-Pesa message
-        final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
-        
-        // Store the parsed message if it doesn't exist
-        await storage.insertMessage(mpesaMessage);
+        for (var message in mpesaMessages) {
+          final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
+          
+          // Check if transaction already exists to avoid duplicates
+          bool exists = await storage.transactionExists(mpesaMessage.transactionCode);
+          if (!exists) {
+            await storage.insertMessage(mpesaMessage);
+          }
+        }
         
         // Close storage connection
         await storage.close();
       }
+      
+      // Update last check time
+      lastCheckTime = DateTime.now();
+      
+    } catch (e) {
+      print('Error checking for new messages in background: $e');
     }
-  } catch (e) {
-    print('Error checking for M-Pesa messages: $e');
-  }
+  });
+
+  // Full scan periodically
+  Timer.periodic(const Duration(minutes: 15), (timer) async {
+    await scanAllMpesaMessages();
+  });
+
+  // Service keeps running in background
 }
 
+// Setup workmanager for periodic background tasks
+Future<void> setupWorkManager() async {
+  await Workmanager().initialize(
+    callbackDispatcher,
+    isInDebugMode: false,
+  );
+
+  // Register periodic task to run even when app is closed
+  await Workmanager().registerPeriodicTask(
+    'mpesa.scanner',
+    'mpesa.periodic.scan',
+    frequency: Duration(minutes: BACKGROUND_SCAN_INTERVAL_MINUTES),
+    constraints: Constraints(
+      networkType: NetworkType.not_required,
+      requiresBatteryNotLow: false,
+      requiresCharging: false,
+      requiresDeviceIdle: false,
+    ),
+    existingWorkPolicy: ExistingWorkPolicy.replace,
+    backoffPolicy: BackoffPolicy.linear,
+    backoffPolicyDelay: Duration(minutes: 5),
+  );
+}
+
+// Setup Android Alarm Manager for pre-Android 12 devices
+Future<void> setupAlarmManager() async {
+  await AndroidAlarmManager.initialize();
+  
+  // Schedule a repeating task
+  await AndroidAlarmManager.periodic(
+    Duration(minutes: BACKGROUND_SCAN_INTERVAL_MINUTES),
+    PERIODIC_JOB_ID,
+    alarmCallback,
+    rescheduleOnReboot: true,
+    exact: true,
+    wakeup: true,
+  );
+}
+
+// Main entry point with enhanced initialization
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Request permissions
+  // Request all necessary permissions
   await [
     Permission.sms,
     Permission.notification,
+    // Add storage permission for older Android versions
+    Permission.storage,
   ].request();
   
-  // Initialize background service
-  await initializeBackgroundService();
+  // Set up implementations based on Android version
+  bool isAndroid12Plus = await isAndroid12OrHigher();
+  
+  // Setup SMS Inbox for monitoring
+  await setupSmsInbox();
+  
+  // Initial scan to populate database with existing messages
+  await scanAllMpesaMessages();
+  
+  // Use Workmanager for Android 12+ (due to background restrictions)
+  if (isAndroid12Plus) {
+    await setupWorkManager();
+  } else {
+    // Use foreground service + alarm manager for older Android versions
+    await setupAlarmManager();
+    await initializeBackgroundService();
+  }
   
   // Initialize storage for the main app
   final storage = getStorageImplementation();
@@ -191,6 +444,7 @@ void main() async {
   
   runApp(const MPesaTrackerApp());
 }
+
 
 class MPesaTrackerApp extends StatelessWidget {
   const MPesaTrackerApp({Key? key}) : super(key: key);
@@ -310,7 +564,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
       
       for (var message in newMessages) {
-        onMpesaMessageReceived(message);
+        if (_isMpesaMessage(message.body ?? "")) {
+          await processMpesaMessage(message.body ?? "");
+        }
       }
     } catch (e) {
       print('Error checking for new messages: $e');
@@ -406,6 +662,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 }
+
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({Key? key}) : super(key: key);
@@ -1594,14 +1851,17 @@ class _TransactionSummaryItem extends StatelessWidget {
     );
   }
 }
-// Transaction Details Screen
+// Transaction Details Scree
+
 
 class TransactionDetailsScreen extends StatelessWidget {
   final MpesaMessage transaction;
+  final Function? onTransactionDeleted; // Callback for when transaction is deleted
 
   const TransactionDetailsScreen({
     Key? key,
     required this.transaction,
+    this.onTransactionDeleted,
   }) : super(key: key);
 
   @override
@@ -1611,11 +1871,23 @@ class TransactionDetailsScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text(
           'Transaction Details',
-          style: TextStyle(fontWeight: FontWeight.w500),
+            style: TextStyle(
+    fontWeight: FontWeight.w500,
+    color: Colors.white,
+  ),
         ),
         centerTitle: true,
         elevation: 0,
         backgroundColor: Theme.of(context).primaryColor,
+        actions: [
+          // Add delete button to app bar
+          IconButton(
+            icon: const Icon(Icons.delete_outline,  color: Colors.white,),
+            onPressed: () => _confirmDelete(context),
+            tooltip: 'Delete transaction',
+        
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         child: Padding(
@@ -1826,6 +2098,23 @@ class TransactionDetailsScreen extends StatelessWidget {
                 ),
               ),
               
+              const SizedBox(height: 24),
+              
+              // Delete button at bottom
+              ElevatedButton.icon(
+                onPressed: () => _confirmDelete(context),
+                icon: const Icon(Icons.delete_outline, color: Colors.white),
+                label: const Text('Delete Transaction', style: TextStyle(color: Colors.white)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red[700],
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 50),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              
               const SizedBox(height: 30),
             ],
           ),
@@ -1947,6 +2236,115 @@ class TransactionDetailsScreen extends StatelessWidget {
       ],
     );
   }
+
+  // Function to confirm deletion with alert dialog
+  void _confirmDelete(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete Transaction'),
+          content: const Text(
+            'Are you sure you want to delete this transaction? This action cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text(
+                'Cancel',
+                style: TextStyle(color: Colors.grey[800]),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _deleteTransaction(context);
+              },
+              child: Text(
+                'Delete',
+                style: TextStyle(color: Colors.red[700]),
+              ),
+            ),
+          ],
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        );
+      },
+    );
+  }
+
+  // Function to delete the transaction from storage
+  void _deleteTransaction(BuildContext context) async {
+    try {
+      // Show loading indicator
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext context) {
+          return const Center(
+            child: CircularProgressIndicator(),
+          );
+        },
+      );
+
+      // Get storage implementation
+      final messageStorage = getStorageImplementation();
+      
+      // Delete the transaction
+      if (transaction.id != null) {
+        await messageStorage.deleteMessage(transaction.id!);
+        
+        // Dismiss loading indicator
+        Navigator.of(context).pop();
+
+        // Show success snackbar
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Transaction deleted successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+
+        // Call the callback if provided
+        if (onTransactionDeleted != null) {
+          onTransactionDeleted!();
+        }
+
+        // Navigate back
+        Navigator.of(context).pop();
+      } else {
+        // Dismiss loading indicator
+        Navigator.of(context).pop();
+        
+        // Show error snackbar if transaction has no ID
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error: Transaction ID not found'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      // Dismiss loading indicator
+      Navigator.of(context).pop();
+      
+      // Show error snackbar
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error deleting transaction: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  // Helper function to determine colors based on transaction direction
+  Color _getStatusColor(String direction) {
+    return direction == 'Incoming' ? Colors.green : Colors.red;
+  }
+}
+
 
   void _showCategoryBottomSheet(BuildContext context, MpesaMessage transaction) {
     // Define available categories
@@ -2100,4 +2498,4 @@ class TransactionDetailsScreen extends StatelessWidget {
   Color _getStatusColor(String direction) {
     return direction == 'Incoming' ? Colors.green[700]! : Colors.red[700]!;
   }
-}
+

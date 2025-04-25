@@ -74,6 +74,42 @@ class HiveStorage implements MessageStorage {
   }
 
   @override
+  Future<bool> transactionExists(String transactionCode) async {
+    _checkInitialized();
+    return _transactionCodeIndex.containsKey(transactionCode);
+  }
+
+  @override
+  Future<MpesaMessage?> getMessageByTransactionCode(String transactionCode) async {
+    _checkInitialized();
+    
+    if (_transactionCodeIndex.containsKey(transactionCode)) {
+      final id = _transactionCodeIndex[transactionCode]!;
+      final map = _box.get(id);
+      
+      if (map != null) {
+        return MpesaMessage.fromMap(Map<String, dynamic>.from(map));
+      }
+    }
+    
+    return null;
+  }
+
+  @override
+  Future<int> insertMessageIfNotExists(MpesaMessage message) async {
+    _checkInitialized();
+    
+    final transactionCode = message.transactionCode;
+    
+    // Check if already exists
+    if (_transactionCodeIndex.containsKey(transactionCode)) {
+      return _transactionCodeIndex[transactionCode]!;
+    }
+    
+    return await insertMessage(message);
+  }
+
+  @override
   Future<List<MpesaMessage>> getAllMessages() async {
     _checkInitialized();
     return _box.values.map((map) => MpesaMessage.fromMap(Map<String, dynamic>.from(map))).toList();
