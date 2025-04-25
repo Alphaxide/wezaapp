@@ -34,7 +34,6 @@ dependencies:
   flutter_background_service: ^5.1.0
   flutter_launcher_icons: ^0.14.3
   device_info_plus: ^11.4.0
-  workmanager: ^0.5.1-dev.8
   android_alarm_manager_plus: ^4.0.7
   
 dev_dependencies:

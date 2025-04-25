@@ -1,5 +1,4 @@
 
-
 import 'package:flutter/material.dart';
 import "package:intl/intl.dart";
 import "package:weza/addbudget_screen.dart";
@@ -23,7 +22,6 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:ui';
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:workmanager/workmanager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 
@@ -33,24 +31,6 @@ const String MPESA_LAST_SCAN_TIME = 'mpesa_last_scan_time';
 const int BACKGROUND_SCAN_INTERVAL_MINUTES = 15;
 const int MAX_SMS_TO_QUERY = 100; // Increased from 20
 const int PERIODIC_JOB_ID = 12345;
-
-// Entry point for workmanager background task
-@pragma('vm:entry-point')
-void callbackDispatcher() {
-  Workmanager().executeTask((task, inputData) async {
-    // Initialize storage first
-    final storage = getStorageImplementation();
-    await storage.initialize();
-    
-    // Then scan messages
-    await scanAllMpesaMessages();
-    
-    // Close storage connection
-    await storage.close();
-    
-    return true;
-  });
-}
 
 // Entry point for alarm manager background task
 @pragma('vm:entry-point')
@@ -369,30 +349,6 @@ void onStart(ServiceInstance service) async {
   // Service keeps running in background
 }
 
-// Setup workmanager for periodic background tasks
-Future<void> setupWorkManager() async {
-  await Workmanager().initialize(
-    callbackDispatcher,
-    isInDebugMode: false,
-  );
-
-  // Register periodic task to run even when app is closed
-  await Workmanager().registerPeriodicTask(
-    'mpesa.scanner',
-    'mpesa.periodic.scan',
-    frequency: Duration(minutes: BACKGROUND_SCAN_INTERVAL_MINUTES),
-    constraints: Constraints(
-      networkType: NetworkType.not_required,
-      requiresBatteryNotLow: false,
-      requiresCharging: false,
-      requiresDeviceIdle: false,
-    ),
-    existingWorkPolicy: ExistingWorkPolicy.replace,
-    backoffPolicy: BackoffPolicy.linear,
-    backoffPolicyDelay: Duration(minutes: 5),
-  );
-}
-
 // Setup Android Alarm Manager for pre-Android 12 devices
 Future<void> setupAlarmManager() async {
   await AndroidAlarmManager.initialize();
@@ -408,6 +364,25 @@ Future<void> setupAlarmManager() async {
   );
 }
 
+// Enhanced background processing setup for all Android versions
+Future<void> setupEnhancedBackgroundProcessing() async {
+  bool isAndroid12Plus = await isAndroid12OrHigher();
+  
+  // For all Android versions, use a combination of foreground service and AlarmManager
+  // This replaces the previous approach of using Workmanager for Android 12+
+  await setupAlarmManager();
+  await initializeBackgroundService();
+  
+  // Additional setup for periodic checks
+  if (isAndroid12Plus) {
+    // For Android 12+, we need to be more aggressive with foreground service
+    // since background restrictions are tighter
+    print('Setting up enhanced background processing for Android 12+');
+    
+    // We could add additional Android 12+ specific optimizations here if needed
+  }
+}
+
 // Main entry point with enhanced initialization
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -420,23 +395,14 @@ void main() async {
     Permission.storage,
   ].request();
   
-  // Set up implementations based on Android version
-  bool isAndroid12Plus = await isAndroid12OrHigher();
-  
   // Setup SMS Inbox for monitoring
   await setupSmsInbox();
   
   // Initial scan to populate database with existing messages
   await scanAllMpesaMessages();
   
-  // Use Workmanager for Android 12+ (due to background restrictions)
-  if (isAndroid12Plus) {
-    await setupWorkManager();
-  } else {
-    // Use foreground service + alarm manager for older Android versions
-    await setupAlarmManager();
-    await initializeBackgroundService();
-  }
+  // Use enhanced background processing setup that doesn't rely on Workmanager
+  await setupEnhancedBackgroundProcessing();
   
   // Initialize storage for the main app
   final storage = getStorageImplementation();
@@ -572,6 +538,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       print('Error checking for new messages: $e');
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
