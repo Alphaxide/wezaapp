@@ -369,7 +369,6 @@ Future<void> setupEnhancedBackgroundProcessing() async {
   bool isAndroid12Plus = await isAndroid12OrHigher();
   
   // For all Android versions, use a combination of foreground service and AlarmManager
-  // This replaces the previous approach of using Workmanager for Android 12+
   await setupAlarmManager();
   await initializeBackgroundService();
   
@@ -401,7 +400,6 @@ void main() async {
   // Initial scan to populate database with existing messages
   await scanAllMpesaMessages();
   
-  // Use enhanced background processing setup that doesn't rely on Workmanager
   await setupEnhancedBackgroundProcessing();
   
   // Initialize storage for the main app
