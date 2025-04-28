@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import "package:intl/intl.dart";
 import "package:weza/addbudget_screen.dart";
@@ -21,186 +20,97 @@ import 'package:flutter_sms_inbox/flutter_sms_inbox.dart';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:ui';
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 
-// Global constants
-const String _isolateName = 'mpesa_isolate';
-const String MPESA_LAST_SCAN_TIME = 'mpesa_last_scan_time';
-const int BACKGROUND_SCAN_INTERVAL_MINUTES = 15;
-const int MAX_SMS_TO_QUERY = 100; // Increased from 20
-const int PERIODIC_JOB_ID = 12345;
+// Constants for shared preferences
+const String lastMessageIdKey = 'last_processed_message_id';
+const String lastSyncTimeKey = 'last_sync_time';
 
-// Entry point for alarm manager background task
-@pragma('vm:entry-point')
-void alarmCallback() async {
-  // This runs in an isolated Dart environment.
-  final storage = getStorageImplementation();
-  await storage.initialize();
-  
-  await scanAllMpesaMessages();
-  
-  await storage.close();
-}
-
-// Entry point for processing SMS messages in background
-@pragma('vm:entry-point')
-Future<void> processSmsInBackground(SmsMessage message) async {
+// SMS message handler for when a new M-Pesa message is detected
+Future<void> processMpesaMessage(SmsMessage message) async {
+  // Check if the message is from M-Pesa
   if (_isMpesaMessage(message.body ?? "")) {
-    // Initialize storage
-    final storage = getStorageImplementation();
-    await storage.initialize();
-    
-    // Parse the M-Pesa message
-    final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
-    
-    // Store the parsed message
-    await storage.insertMessage(mpesaMessage);
-    
-    // Close storage connection
-    await storage.close();
-  }
-}
-
-// Separate background scan function that can be called from multiple places
-Future<void> scanAllMpesaMessages() async {
-  try {
-    // Get shared preferences to track last scan time
-    final prefs = await SharedPreferences.getInstance();
-    final lastScanTime = prefs.getInt(MPESA_LAST_SCAN_TIME) ?? 0;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    
-    // Initialize SMS query plugin
-    final SmsQuery query = SmsQuery();
-    
-    // Query both inbox and sent messages
-    await _processSmsFolder(query, SmsQueryKind.inbox, lastScanTime);
-    await _processSmsFolder(query, SmsQueryKind.sent, lastScanTime);
-    
-    // Update last scan time
-    await prefs.setInt(MPESA_LAST_SCAN_TIME, now);
-    
-  } catch (e) {
-    print('Error in scanAllMpesaMessages: $e');
-  }
-}
-
-Future<void> _processSmsFolder(SmsQuery query, SmsQueryKind kind, int lastScanTime) async {
-  try {
-    // Get messages since the last scan time
-    DateTime lastScan = DateTime.fromMillisecondsSinceEpoch(lastScanTime);
-    
-    // Fetch more messages to ensure we don't miss any
-    final List<SmsMessage> messages = await query.querySms(
-      kinds: [kind],
-      count: MAX_SMS_TO_QUERY,
-    );
-    
-    // Initialize storage inside the function to ensure it's initialized even when called independently
-    final storage = getStorageImplementation();
-    await storage.initialize();
-    
-    int processedCount = 0;
-    
-    for (var message in messages) {
-      // Process messages that arrived after the last scan
-      if (message.date != null && 
-          (lastScanTime == 0 || message.date!.isAfter(lastScan)) && 
-          _isMpesaMessage(message.body ?? "")) {
-        
-        // Parse the M-Pesa message
-        final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
-        
-        // Check if transaction already exists to avoid duplicates
-        bool exists = await storage.transactionExists(mpesaMessage.transactionCode);
-        
-        if (!exists) {
-          try {
-            await storage.insertMessage(mpesaMessage);
-            processedCount++;
-          } catch (e) {
-            print('Error inserting message: $e');
-          }
-        }
-      }
+    try {
+      // Initialize storage
+      final storage = getStorageImplementation();
+      await storage.initialize();
+      
+      // Parse the M-Pesa message
+      final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
+      
+      // Store the parsed message
+      await storage.insertMessage(mpesaMessage);
+      
+      // Store the message ID as processed
+      await _markMessageAsProcessed(message.id.toString());
+      
+      print('Processed M-Pesa message: ${message.id}');
+    } catch (e) {
+      print('Error processing M-Pesa message: $e');
     }
-    
-    print('Processed $processedCount ${kind == SmsQueryKind.inbox ? "inbox" : "sent"} M-Pesa messages');
-    
-    // Close storage connection
-    await storage.close();
-  } catch (e) {
-    print('Error processing SMS folder ${kind.toString()}: $e');
   }
 }
 
-// Enhanced check for M-Pesa messages to catch more variants
+// Check if a message is from M-Pesa with improved detection
 bool _isMpesaMessage(String message) {
   if (message.isEmpty) return false;
   
-  // Common M-Pesa message keywords with expanded coverage
+  // Common M-Pesa message keywords and patterns
   final mpesaKeywords = [
     'M-PESA', 'MPESA', 'confirmed', 'transaction', 'sent to',
-    'received', 'withdrawn', 'withdrawn at', 'deposited', 'paid to', 
-    'Buy Goods', 'Safaricom', 'Paybill', 'Till Number', 'airtime',
-    'Fuliza', 'Mshwari', 'KCB', 'Okoa', 'reversal', 'Pochi', 'Agent',
-    'New M-PESA balance', 'PESA balance', 'ATM'
+    'received', 'withdrawn', 'paid to', 'Buy Goods',
+    'Safaricom', 'Paybill', 'Till Number', 'balance is'
   ];
   
+  // Common M-Pesa senders
+  final mpesaSenders = [
+    'MPESA', 'M-PESA', 'SAFARICOM'
+  ];
+  
+  // Check for transaction code pattern (usually 10 characters alphanumeric)
+  final transactionCodePattern = RegExp(r'\b[A-Z0-9]{10}\b');
+  
   message = message.toUpperCase();
-  return mpesaKeywords.any((keyword) => message.contains(keyword.toUpperCase()));
-}
-
-// Check if the device is running Android 12 or higher
-Future<bool> isAndroid12OrHigher() async {
-  if (!Platform.isAndroid) return false;
   
-  DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
-  AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
-  return androidInfo.version.sdkInt >= 31; // Android 12 is API level 31
-}
-
-// Setup SMS inbox for periodic polling
-Future<void> setupSmsInbox() async {
-  // Request SMS permissions
-  final status = await Permission.sms.request();
+  // Check if message contains transaction code pattern
+  final hasTransactionCode = transactionCodePattern.hasMatch(message);
   
-  if (status.isGranted) {
-    // Since flutter_sms_inbox doesn't have a direct listener for new messages,
-    // we'll implement polling in the app lifecycle and background service
-    print('SMS permissions granted. Polling setup will be handled in background service.');
-  } else {
-    print('SMS permissions not granted. Cannot monitor for M-Pesa messages.');
-  }
+  // Check if message contains any of the keywords
+  final hasKeywords = mpesaKeywords.any((keyword) => 
+      message.contains(keyword.toUpperCase()));
+  
+  return hasKeywords || hasTransactionCode;
 }
 
-// Helper method to process a single M-Pesa message
-Future<void> processMpesaMessage(String messageText) async {
-  try {
-    final storage = getStorageImplementation();
-    await storage.initialize();
-    
-    final mpesaMessage = MpesaParser.parseSms(messageText);
-    
-    // Check if transaction already exists
-    bool exists = await storage.transactionExists(mpesaMessage.transactionCode);
-    
-    if (!exists) {
-      await storage.insertMessage(mpesaMessage);
-    }
-    
-    await storage.close();
-  } catch (e) {
-    print('Error processing M-Pesa message: $e');
-  }
+// Store the last processed message ID
+Future<void> _markMessageAsProcessed(String messageId) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString(lastMessageIdKey, messageId);
+  await prefs.setInt(lastSyncTimeKey, DateTime.now().millisecondsSinceEpoch);
 }
 
-// Initialize the background service with more robust configuration
+// Get the last processed message ID
+Future<String?> _getLastProcessedMessageId() async {
+  final prefs = await SharedPreferences.getInstance();
+  return prefs.getString(lastMessageIdKey);
+}
+
+// Get the last sync time
+Future<DateTime?> _getLastSyncTime() async {
+  final prefs = await SharedPreferences.getInstance();
+  final timestamp = prefs.getInt(lastSyncTimeKey);
+  if (timestamp != null) {
+    return DateTime.fromMillisecondsSinceEpoch(timestamp);
+  }
+  return null;
+}
+
+// Set of already processed message IDs to prevent duplicates in memory
+final Set<String> _processedMessageIds = {};
+
 Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
 
-  // Create notification channel
   const AndroidNotificationChannel channel = AndroidNotificationChannel(
     'weza_foreground',
     'Weza Foreground Service',
@@ -233,7 +143,6 @@ Future<void> initializeBackgroundService() async {
       initialNotificationTitle: 'Weza M-Pesa Listener',
       initialNotificationContent: 'Monitoring M-Pesa messages',
       foregroundServiceNotificationId: 888,
-      autoStartOnBoot: true, // Start on device boot
     ),
     iosConfiguration: IosConfiguration(
       autoStart: true,
@@ -242,7 +151,6 @@ Future<void> initializeBackgroundService() async {
     ),
   );
 
-  // Start the service
   service.startService();
 }
 
@@ -251,7 +159,6 @@ Future<bool> onIosBackground(ServiceInstance service) async {
   return true;
 }
 
-// Enhanced onStart handler for the foreground service
 @pragma('vm:entry-point')
 void onStart(ServiceInstance service) async {
   DartPluginRegistrant.ensureInitialized();
@@ -259,12 +166,9 @@ void onStart(ServiceInstance service) async {
   if (service is AndroidServiceInstance) {
     await service.setForegroundNotificationInfo(
       title: "Weza M-Pesa Listener",
-      content: "Monitoring M-Pesa messages",
+      content: "Monitoring M-Pesa messages in background",
     );
 
-    // Set as foreground service
-    service.setAsForegroundService();
-    
     service.on('setAsForeground').listen((event) {
       service.setAsForegroundService();
     });
@@ -278,137 +182,138 @@ void onStart(ServiceInstance service) async {
     service.stopSelf();
   });
 
-  // Initialize storage
-  final storage = getStorageImplementation();
-  await storage.initialize();
-  
-  // Initial scan of messages
-  await scanAllMpesaMessages();
-  
-  // Close storage connection to prevent leaks
-  await storage.close();
-
-  // Create SmsQuery instance for periodic checks
+  // Initialize SMS query plugin
   final SmsQuery query = SmsQuery();
-  DateTime? lastCheckTime;
 
-  // Periodic monitoring with more frequent intervals
-  Timer.periodic(const Duration(minutes: 1), (timer) async {
-    if (lastCheckTime == null) {
-      lastCheckTime = DateTime.now().subtract(const Duration(minutes: 5));
-    }
+  // Load already processed message IDs
+  final lastProcessedId = await _getLastProcessedMessageId();
+  if (lastProcessedId != null) {
+    _processedMessageIds.add(lastProcessedId);
+  }
+
+  // Initial full sync
+  await performFullSync(query);
+
+  // Periodic SMS checking - more frequent checks
+  Timer.periodic(const Duration(minutes: 5), (timer) async {
+    await checkForNewMpesaMessages(query);
+  });
+
+  // Do a full sync less frequently to catch any missed messages
+  Timer.periodic(const Duration(hours: 12), (timer) async {
+    await performFullSync(query);
+  });
+}
+
+// Method to perform a full sync of all M-Pesa messages
+Future<void> performFullSync(SmsQuery query) async {
+  try {
+    print('Starting full sync of M-Pesa messages');
     
-    try {
-      // Query for new messages since last check
-      final List<SmsMessage> newMessages = await query.querySms(
-        kinds: [SmsQueryKind.inbox],
-        count: 20,
-        address: '', // All messages
-      );
-      
-      // Filter for new M-Pesa messages
-      final mpesaMessages = newMessages.where((message) => 
-        message.date != null && 
-        message.date!.isAfter(lastCheckTime!) && 
-        _isMpesaMessage(message.body ?? "")
-      ).toList();
-      
-      // Process new M-Pesa messages
-      if (mpesaMessages.isNotEmpty) {
-        // Initialize storage for this batch
-        final storage = getStorageImplementation();
-        await storage.initialize();
-        
-        for (var message in mpesaMessages) {
-          final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
-          
-          // Check if transaction already exists to avoid duplicates
-          bool exists = await storage.transactionExists(mpesaMessage.transactionCode);
-          if (!exists) {
-            await storage.insertMessage(mpesaMessage);
-          }
-        }
-        
-        // Close storage connection
-        await storage.close();
+    // Get messages from the last 6 months
+    final sixMonthsAgo = DateTime.now().subtract(const Duration(days: 180));
+    final allMessages = await query.querySms(
+      kinds: [SmsQueryKind.inbox],
+      count: 500, // Increase count to fetch more messages
+    );
+    
+    int processedCount = 0;
+    
+    // Get the last processed ID to avoid reprocessing
+    final lastProcessedId = await _getLastProcessedMessageId();
+    
+    // Process all messages that match M-Pesa criteria
+    for (var message in allMessages) {
+      // Skip if message is too old
+      if (message.date != null && message.date!.isBefore(sixMonthsAgo)) {
+        continue;
       }
       
-      // Update last check time
-      lastCheckTime = DateTime.now();
+      // Skip already processed messages
+      if (lastProcessedId == message.id.toString() || 
+          _processedMessageIds.contains(message.id.toString())) {
+        continue;
+      }
       
-    } catch (e) {
-      print('Error checking for new messages in background: $e');
+      if (_isMpesaMessage(message.body ?? "")) {
+        await processMpesaMessage(message);
+        _processedMessageIds.add(message.id.toString());
+        processedCount++;
+      }
     }
-  });
-
-  // Full scan periodically
-  Timer.periodic(const Duration(minutes: 15), (timer) async {
-    await scanAllMpesaMessages();
-  });
-
-  // Service keeps running in background
-}
-
-// Setup Android Alarm Manager for pre-Android 12 devices
-Future<void> setupAlarmManager() async {
-  await AndroidAlarmManager.initialize();
-  
-  // Schedule a repeating task
-  await AndroidAlarmManager.periodic(
-    Duration(minutes: BACKGROUND_SCAN_INTERVAL_MINUTES),
-    PERIODIC_JOB_ID,
-    alarmCallback,
-    rescheduleOnReboot: true,
-    exact: true,
-    wakeup: true,
-  );
-}
-
-// Enhanced background processing setup for all Android versions
-Future<void> setupEnhancedBackgroundProcessing() async {
-  bool isAndroid12Plus = await isAndroid12OrHigher();
-  
-  // For all Android versions, use a combination of foreground service and AlarmManager
-  await setupAlarmManager();
-  await initializeBackgroundService();
-  
-  // Additional setup for periodic checks
-  if (isAndroid12Plus) {
-    // For Android 12+, we need to be more aggressive with foreground service
-    // since background restrictions are tighter
-    print('Setting up enhanced background processing for Android 12+');
     
-    // We could add additional Android 12+ specific optimizations here if needed
+    print('Full sync completed. Processed $processedCount new M-Pesa messages.');
+    
+    // Update last sync time
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(lastSyncTimeKey, DateTime.now().millisecondsSinceEpoch);
+    
+  } catch (e) {
+    print('Error during full sync: $e');
   }
 }
 
-// Main entry point with enhanced initialization
+// Method to check for new M-Pesa messages since last check
+Future<void> checkForNewMpesaMessages(SmsQuery query) async {
+  try {
+    print('Checking for new M-Pesa messages');
+    
+    // Get the time of last sync
+    final lastSyncTime = await _getLastSyncTime() ?? 
+                          DateTime.now().subtract(const Duration(minutes: 10));
+    
+    // Get recent messages
+    final messages = await query.querySms(
+      kinds: [SmsQueryKind.inbox],
+      count: 50, // Increased from 20 to 50 to reduce chances of missing messages
+    );
+    
+    int processedCount = 0;
+    
+    // Filter for messages that came after our last check
+    final newMessages = messages.where(
+      (message) => message.date != null && 
+                   message.date!.isAfter(lastSyncTime) &&
+                   !_processedMessageIds.contains(message.id.toString())
+    );
+    
+    for (var message in newMessages) {
+      if (_isMpesaMessage(message.body ?? "")) {
+        await processMpesaMessage(message);
+        _processedMessageIds.add(message.id.toString());
+        processedCount++;
+      }
+    }
+    
+    print('Processed $processedCount new M-Pesa messages.');
+    
+  } catch (e) {
+    print('Error checking for new M-Pesa messages: $e');
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Request all necessary permissions
+  // Request permissions
   await [
     Permission.sms,
     Permission.notification,
-    // Add storage permission for older Android versions
-    Permission.storage,
   ].request();
   
-  // Setup SMS Inbox for monitoring
-  await setupSmsInbox();
-  
-  // Initial scan to populate database with existing messages
-  await scanAllMpesaMessages();
-  
-  await setupEnhancedBackgroundProcessing();
+  // Initialize background service
+  await initializeBackgroundService();
   
   // Initialize storage for the main app
   final storage = getStorageImplementation();
   await storage.initialize();
   
+  // Perform initial sync of messages when app starts
+  final SmsQuery query = SmsQuery();
+  await performFullSync(query);
+  
   runApp(const MPesaTrackerApp());
 }
-
 
 class MPesaTrackerApp extends StatelessWidget {
   const MPesaTrackerApp({Key? key}) : super(key: key);
@@ -462,8 +367,8 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _selectedIndex = 0;
   final SmsQuery _query = SmsQuery();
-  Timer? _smsCheckTimer;
-  DateTime? _lastCheckedTime;
+  Timer? _regularCheckTimer;
+  Timer? _fullSyncTimer;
   
   final List<Widget> _screens = [
     const DashboardScreen(),
@@ -481,7 +386,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   
   @override
   void dispose() {
-    _smsCheckTimer?.cancel();
+    _regularCheckTimer?.cancel();
+    _fullSyncTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -490,7 +396,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       // App came to foreground, check for new messages
-      _checkForNewMessages();
+      checkForNewMpesaMessages(_query);
     }
   }
   
@@ -499,44 +405,47 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final status = await Permission.sms.request();
     
     if (status.isGranted) {
-      // Since flutter_sms_inbox doesn't have a listener for new messages,
-      // we'll poll for new messages periodically
-      _smsCheckTimer = Timer.periodic(const Duration(seconds: 30), (timer) async {
-        await _checkForNewMessages();
+      // Regular checks for new messages
+      _regularCheckTimer = Timer.periodic(const Duration(minutes: 2), (timer) async {
+        await checkForNewMpesaMessages(_query);
+      });
+      
+      // Full sync less frequently
+      _fullSyncTimer = Timer.periodic(const Duration(hours: 24), (timer) async {
+        await performFullSync(_query);
       });
       
       // Do an immediate check
-      await _checkForNewMessages();
-    }
-  }
-  
-  Future<void> _checkForNewMessages() async {
-    final now = DateTime.now();
-    final checkFrom = _lastCheckedTime ?? now.subtract(const Duration(minutes: 2));
-    _lastCheckedTime = now;
-    
-    try {
-      final messages = await _query.querySms(
-        kinds: [SmsQueryKind.inbox],
-        count: 10,
-      );
-      
-      // Filter for messages that came after our last check
-      final newMessages = messages.where(
-        (message) => message.date != null && 
-                    message.date!.isAfter(checkFrom)
-      );
-      
-      for (var message in newMessages) {
-        if (_isMpesaMessage(message.body ?? "")) {
-          await processMpesaMessage(message.body ?? "");
-        }
+      await checkForNewMpesaMessages(_query);
+    } else {
+      // Show permission denied dialog
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('SMS Permission Required'),
+            content: const Text(
+              'Weza needs SMS permission to detect and process M-Pesa messages automatically. '
+              'Please grant this permission for the app to work properly.'
+            ),
+            actions: [
+              TextButton(
+                child: const Text('Open Settings'),
+                onPressed: () {
+                  openAppSettings();
+                  Navigator.pop(context);
+                },
+              ),
+              TextButton(
+                child: const Text('Close'),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
       }
-    } catch (e) {
-      print('Error checking for new messages: $e');
     }
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -627,7 +536,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 }
-
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({Key? key}) : super(key: key);
