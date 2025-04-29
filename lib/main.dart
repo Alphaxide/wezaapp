@@ -1,3 +1,4 @@
+
 import 'package:flutter/material.dart';
 import "package:intl/intl.dart";
 import "package:weza/addbudget_screen.dart";
@@ -35,8 +36,10 @@ Future<void> processMpesaMessage(SmsMessage message) async {
       final storage = getStorageImplementation();
       await storage.initialize();
       
-      // Parse the M-Pesa message
-      final mpesaMessage = MpesaParser.parseSms(message.body ?? "");
+      // Pass the COMPLETE, UNMODIFIED message body to the parser
+      // Do not trim, modify or transform the message in any way
+      final rawMessageBody = message.body ?? "";
+      final mpesaMessage = MpesaParser.parseSms(rawMessageBody);
       
       // Store the parsed message
       await storage.insertMessage(mpesaMessage);
@@ -64,20 +67,21 @@ bool _isMpesaMessage(String message) {
   
   // Common M-Pesa senders
   final mpesaSenders = [
-    'MPESA', 'M-PESA', 'SAFARICOM'
+    'MPESA', 'M-PESA'
   ];
   
   // Check for transaction code pattern (usually 10 characters alphanumeric)
   final transactionCodePattern = RegExp(r'\b[A-Z0-9]{10}\b');
   
-  message = message.toUpperCase();
+  // Create a copy for checking, but keep original message intact for processing
+  String upperMessage = message.toUpperCase();
   
   // Check if message contains transaction code pattern
-  final hasTransactionCode = transactionCodePattern.hasMatch(message);
+  final hasTransactionCode = transactionCodePattern.hasMatch(upperMessage);
   
   // Check if message contains any of the keywords
   final hasKeywords = mpesaKeywords.any((keyword) => 
-      message.contains(keyword.toUpperCase()));
+      upperMessage.contains(keyword.toUpperCase()));
   
   return hasKeywords || hasTransactionCode;
 }
@@ -200,30 +204,67 @@ void onStart(ServiceInstance service) async {
   });
 
   // Do a full sync less frequently to catch any missed messages
-  Timer.periodic(const Duration(hours: 12), (timer) async {
+  Timer.periodic(const Duration(hours: 24), (timer) async {
     await performFullSync(query);
   });
 }
 
-// Method to perform a full sync of all M-Pesa messages
+  // Method to perform a full sync of all M-Pesa messages
 Future<void> performFullSync(SmsQuery query) async {
   try {
     print('Starting full sync of M-Pesa messages');
     
     // Get messages from the last 6 months
     final sixMonthsAgo = DateTime.now().subtract(const Duration(days: 180));
-    final allMessages = await query.querySms(
-      kinds: [SmsQueryKind.inbox],
-      count: 500, // Increase count to fetch more messages
-    );
     
+    // Since flutter_sms_inbox doesn't support offset, we'll request all messages
+    // and process them in memory
     int processedCount = 0;
     
     // Get the last processed ID to avoid reprocessing
     final lastProcessedId = await _getLastProcessedMessageId();
     
+    // Get list of senders we know are M-Pesa related
+    final knownMpesaSenders = [
+      'MPESA', 'M-PESA', 'SAFARICOM', '234567', 'SAFCOM'
+    ];
+    
+    // Process messages from known M-Pesa senders first
+    for (final sender in knownMpesaSenders) {
+      final messages = await query.querySms(
+        kinds: [SmsQueryKind.inbox],
+        address: sender,
+        count: 100,
+      );
+      
+      for (var message in messages) {
+        // Skip if message is too old
+        if (message.date != null && message.date!.isBefore(sixMonthsAgo)) {
+          continue;
+        }
+        
+        // Skip already processed messages
+        if (lastProcessedId == message.id.toString() || 
+            _processedMessageIds.contains(message.id.toString())) {
+          continue;
+        }
+        
+        if (_isMpesaMessage(message.body ?? "")) {
+          await processMpesaMessage(message);
+          _processedMessageIds.add(message.id.toString());
+          processedCount++;
+        }
+      }
+    }
+    
+    // Then process the most recent messages regardless of sender
+    final recentMessages = await query.querySms(
+      kinds: [SmsQueryKind.inbox],
+      count: 300, // Fetch more messages to ensure we don't miss any
+    );
+    
     // Process all messages that match M-Pesa criteria
-    for (var message in allMessages) {
+    for (var message in recentMessages) {
       // Skip if message is too old
       if (message.date != null && message.date!.isBefore(sixMonthsAgo)) {
         continue;
@@ -289,6 +330,31 @@ Future<void> checkForNewMpesaMessages(SmsQuery query) async {
     
   } catch (e) {
     print('Error checking for new M-Pesa messages: $e');
+  }
+}
+
+// Do an initial check of all SMS from current sender when a new M-Pesa is detected
+// This helps to catch any other messages from the same sender
+Future<void> processAllMessagesFromSender(SmsQuery query, String sender) async {
+  try {
+    if (sender.isEmpty) return;
+    
+    final messages = await query.querySms(
+      kinds: [SmsQueryKind.inbox],
+      address: sender,
+      count: 100
+    );
+    
+    for (var message in messages) {
+      if (!_processedMessageIds.contains(message.id.toString()) && 
+          _isMpesaMessage(message.body ?? "")) {
+        await processMpesaMessage(message);
+        _processedMessageIds.add(message.id.toString());
+      }
+    }
+    
+  } catch (e) {
+    print('Error processing messages from sender: $e');
   }
 }
 
@@ -615,9 +681,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final top3Categories = topCategories.take(3).toList();
     
     // Get recent transactions
-    final recentTransactions = currentMonthMessages
-      .take(4)
-      .toList();
+   // Get recent transactions sorted by date (most recent first)
+
+// Get recent transactions sorted by date (most recent first)
+final toprecentTransactions = currentMonthMessages
+  ..sort((a, b) => b.transactionDate.compareTo(a.transactionDate));
+final recentTransactions = toprecentTransactions.take(4).toList();
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
@@ -635,14 +704,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         centerTitle: true,
         elevation: 0,
         backgroundColor: Theme.of(context).primaryColor,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.calendar_month),
-            onPressed: () {
-              // Month selector functionality would go here
-            },
-          ),
-        ],
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -875,6 +936,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       },
                       icon: const Icon(Icons.arrow_forward, size: 16),
                       label: const Text('See All'),
+       
                       style: TextButton.styleFrom(
                         foregroundColor: Theme.of(context).primaryColor,
                         minimumSize: Size.zero,
@@ -1724,9 +1786,7 @@ class _TransactionSummaryItem extends StatelessWidget {
     );
   }
 }
-// Transaction Details Scree
-
-
+// Transaction Details Screen
 class TransactionDetailsScreen extends StatelessWidget {
   final MpesaMessage transaction;
   final Function? onTransactionDeleted; // Callback for when transaction is deleted
@@ -2218,7 +2278,6 @@ class TransactionDetailsScreen extends StatelessWidget {
   }
 }
 
-
   void _showCategoryBottomSheet(BuildContext context, MpesaMessage transaction) {
     // Define available categories
     final categories = [
@@ -2371,4 +2430,3 @@ class TransactionDetailsScreen extends StatelessWidget {
   Color _getStatusColor(String direction) {
     return direction == 'Incoming' ? Colors.green[700]! : Colors.red[700]!;
   }
-

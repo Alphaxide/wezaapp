@@ -131,10 +131,6 @@ class _BudgetScreenState extends State<BudgetScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      
-
-
-
       body: _buildBody(),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () { Navigator.push(
@@ -190,7 +186,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
       child: SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
         child: Padding(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.fromLTRB(16.0, 50.0, 16.0, 16.0), // Added top margin here
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -412,8 +408,8 @@ class _BudgetScreenState extends State<BudgetScreen> {
               category: budget.category,
               budgeted: budget.amount,
               spent: spent,
-              progress: progress, onTap: () {  },
-              
+              progress: progress, 
+              onTap: () {  },
             );
           } catch (e) {
             print("BudgetScreen: Error rendering budget at index $index: $e");
@@ -628,6 +624,7 @@ class _CategoryBudgetCard extends StatelessWidget {
     );
   }
 
+
   IconData _getCategoryIcon(String category) {
     switch (category.toLowerCase()) {
       case 'food':
@@ -660,7 +657,7 @@ class _CategoryBudgetCard extends StatelessWidget {
         return Icons.category;
     }
   }
-
+  
   Color _getCategoryColor(String category) {
     switch (category.toLowerCase()) {
       case 'food':
